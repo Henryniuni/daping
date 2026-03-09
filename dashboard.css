@@ -167,8 +167,27 @@ body {
   display: flex;
   flex-direction: column;
   position: relative;
-  transition: all 0.3s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
   height: 600px; /* 固定高度 */
+  cursor: grab; /* 拖拽手势 */
+  user-select: none;
+}
+
+.grid-item:active {
+  cursor: grabbing;
+}
+
+.grid-item.dragging {
+  opacity: 0.8;
+  transform: scale(1.02);
+  box-shadow: 0 8px 24px rgba(255, 0, 80, 0.3);
+  border-color: #ff0050;
+  z-index: 1000;
+}
+
+.grid-item.drag-over {
+  border: 2px dashed #ff0050;
+  background-color: rgba(255, 0, 80, 0.1);
 }
 
 .grid-item:hover {
@@ -186,6 +205,31 @@ body {
   align-items: center;
   border-bottom: 1px solid #2a2a4a;
   flex-shrink: 0;
+  cursor: grab; /* 拖拽手势 */
+}
+
+.item-header:active {
+  cursor: grabbing;
+}
+
+/* Drag Handle */
+.drag-handle {
+  cursor: grab;
+  padding: 4px 8px;
+  margin-right: 8px;
+  color: #5c6380;
+  font-size: 14px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.drag-handle:hover {
+  color: #ff0050;
+  background-color: rgba(255, 0, 80, 0.1);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
 }
 
 .item-title {

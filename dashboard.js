@@ -26,6 +26,11 @@
   // 缩放阈值：小于此值时切换为滚动模式
   const SCALE_THRESHOLD = 0.5;
 
+  // 拖拽相关变量
+  let draggedItem = null;
+  let draggedBoardId = null;
+  let dragOverItem = null;
+
   // ============================================
   // DOM 元素引用
   // ============================================
@@ -176,14 +181,22 @@
     const header = document.createElement('div');
     header.className = 'item-header';
     
-    // 标题区域（包含序号、标题、缩放比例）
+    // 标题区域（包含拖拽手柄、序号、标题、缩放比例）
     const titleArea = document.createElement('div');
     titleArea.className = 'item-title-area';
     titleArea.style.cssText = 'display: flex; align-items: center; overflow: hidden; flex: 1;';
     
+    // 拖拽手柄
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'drag-handle';
+    dragHandle.innerHTML = '⋮⋮'; // 拖拽图标
+    dragHandle.title = '拖拽排序';
+    
     const indexSpan = document.createElement('span');
     indexSpan.className = 'item-index';
     indexSpan.textContent = `#${index}`;
+    
+    titleArea.appendChild(dragHandle);
     
     const titleSpan = document.createElement('span');
     titleSpan.className = 'item-title';
@@ -259,6 +272,9 @@
     item.appendChild(header);
     item.appendChild(iframeWrapper);
     item.appendChild(loading);
+
+    // 添加拖拽功能
+    addDragListeners(item);
 
     return item;
   }
@@ -493,6 +509,178 @@
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  // ============================================
+  // 拖拽排序功能
+  // ============================================
+
+  /**
+   * 为 grid-item 添加拖拽事件监听
+   * @param {HTMLElement} item - grid-item 元素
+   */
+  function addDragListeners(item) {
+    // 使用 header 作为拖拽手柄
+    const header = item.querySelector('.item-header');
+    
+    item.setAttribute('draggable', 'true');
+    
+    // 拖拽开始
+    item.addEventListener('dragstart', handleDragStart);
+    
+    // 拖拽结束
+    item.addEventListener('dragend', handleDragEnd);
+    
+    // 拖拽经过
+    item.addEventListener('dragover', handleDragOver);
+    
+    // 拖拽进入
+    item.addEventListener('dragenter', handleDragEnter);
+    
+    // 拖拽离开
+    item.addEventListener('dragleave', handleDragLeave);
+    
+    // 放置
+    item.addEventListener('drop', handleDrop);
+  }
+
+  /**
+   * 拖拽开始
+   */
+  function handleDragStart(e) {
+    draggedItem = this;
+    draggedBoardId = parseInt(this.dataset.id, 10);
+    
+    // 添加拖拽中样式
+    this.classList.add('dragging');
+    
+    // 设置拖拽数据
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', draggedBoardId);
+    
+    console.log('[千川助手] 开始拖拽:', draggedBoardId);
+  }
+
+  /**
+   * 拖拽结束
+   */
+  function handleDragEnd(e) {
+    // 移除拖拽中样式
+    this.classList.remove('dragging');
+    
+    // 移除所有 drag-over 样式
+    document.querySelectorAll('.grid-item.drag-over').forEach(item => {
+      item.classList.remove('drag-over');
+    });
+    
+    draggedItem = null;
+    draggedBoardId = null;
+    dragOverItem = null;
+    
+    console.log('[千川助手] 拖拽结束');
+  }
+
+  /**
+   * 拖拽经过
+   */
+  function handleDragOver(e) {
+    e.preventDefault(); // 允许放置
+    e.dataTransfer.dropEffect = 'move';
+  }
+
+  /**
+   * 拖拽进入
+   */
+  function handleDragEnter(e) {
+    e.preventDefault();
+    
+    if (this !== draggedItem) {
+      this.classList.add('drag-over');
+      dragOverItem = this;
+    }
+  }
+
+  /**
+   * 拖拽离开
+   */
+  function handleDragLeave(e) {
+    // 检查是否真的离开了元素（而不是进入了子元素）
+    if (!this.contains(e.relatedTarget)) {
+      this.classList.remove('drag-over');
+    }
+  }
+
+  /**
+   * 放置
+   */
+  function handleDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // 移除 drag-over 样式
+    this.classList.remove('drag-over');
+    
+    if (this === draggedItem) {
+      return; // 不能放置到自己
+    }
+    
+    const targetBoardId = parseInt(this.dataset.id, 10);
+    
+    if (!draggedBoardId || !targetBoardId) {
+      return;
+    }
+    
+    console.log('[千川助手] 放置:', draggedBoardId, '->', targetBoardId);
+    
+    // 交换位置
+    swapBoards(draggedBoardId, targetBoardId);
+  }
+
+  /**
+   * 交换两个看板的位置
+   * @param {number} sourceId - 源看板 ID
+   * @param {number} targetId - 目标看板 ID
+   */
+  function swapBoards(sourceId, targetId) {
+    const sourceIndex = boards.findIndex(b => b.id === sourceId);
+    const targetIndex = boards.findIndex(b => b.id === targetId);
+    
+    if (sourceIndex === -1 || targetIndex === -1) {
+      console.error('[千川助手] 找不到看板:', sourceId, targetId);
+      return;
+    }
+    
+    // 交换数组中的位置
+    [boards[sourceIndex], boards[targetIndex]] = [boards[targetIndex], boards[sourceIndex]];
+    
+    console.log('[千川助手] 交换位置:', sourceIndex, '<->', targetIndex);
+    
+    // 保存新的顺序到 storage
+    saveBoardsOrder();
+    
+    // 重新渲染
+    renderBoards();
+  }
+
+  /**
+   * 保存看板顺序到 storage
+   */
+  function saveBoardsOrder() {
+    chrome.runtime.sendMessage(
+      { action: 'saveBoards', data: { boards } },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('[千川助手] 保存顺序失败:', chrome.runtime.lastError);
+          return;
+        }
+        
+        if (response && response.success) {
+          console.log('[千川助手] 顺序保存成功');
+        } else {
+          console.error('[千川助手] 保存顺序失败:', response?.error);
+        }
+      }
+    );
   }
 
 })();

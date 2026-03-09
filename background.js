@@ -53,6 +53,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleAutoNavigate(sendResponse);
       return true; // 异步响应
 
+    case 'saveBoards':
+      // 保存看板列表（用于排序）
+      handleSaveBoards(data, sendResponse);
+      return true; // 异步响应
+
     default:
       sendResponse({ success: false, error: '未知 action: ' + action });
       return false;
@@ -180,4 +185,20 @@ async function handleAutoNavigate(sendResponse) {
   } catch (error) {
     sendResponse({ success: false, error: error.message });
   }
+}
+
+/**
+ * 保存看板列表（用于排序）
+ * @param {Object} data - { boards: array }
+ * @param {Function} sendResponse - 响应回调
+ */
+function handleSaveBoards(data, sendResponse) {
+  if (!data || !Array.isArray(data.boards)) {
+    sendResponse({ success: false, error: '缺少 boards 参数' });
+    return;
+  }
+
+  chrome.storage.local.set({ boards: data.boards }, () => {
+    sendResponse({ success: true, count: data.boards.length });
+  });
 }
