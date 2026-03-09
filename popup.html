@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>千川直播聚合看板</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- 头部 -->
+  <header class="header">
+    <div class="logo">千</div>
+    <h1>千川直播聚合看板</h1>
+  </header>
+
+  <!-- 主内容区 -->
+  <main class="content">
+    <!-- 按钮区 -->
+    <div class="button-group">
+      <button id="btn-capture" class="btn btn-primary">
+        📍 捕获当前大屏
+      </button>
+      <button id="btn-auto" class="btn btn-secondary">
+        🤖 自动寻找并捕获
+      </button>
+      <button id="btn-open" class="btn btn-secondary">
+        📊 打开聚合看板
+      </button>
+    </div>
+
+    <!-- 统计区 -->
+    <div class="stats-box">
+      已保存直播间: <span id="board-count" class="count">0</span> 个
+    </div>
+
+    <!-- 提示区 -->
+    <div class="tip-box">
+      💡 提示：请先扫码登录千川，然后打开任意直播间页面或列表页
+    </div>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

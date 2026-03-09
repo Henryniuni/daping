@@ -1,0 +1,50 @@
+{
+  "name": "千川多账号直播聚合看板",
+  "version": "1.0.0",
+  "manifest_version": 3,
+  "description": "千川直播多账号聚合看板 - 支持多账号直播数据监控",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://qianchuan.jinritemai.com/*",
+    "https://buyin.jinritemai.com/*"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "remove_xframe",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "千川多账号直播聚合看板"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://qianchuan.jinritemai.com/*",
+        "https://buyin.jinritemai.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["dashboard.html", "dashboard.js", "dashboard.css"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

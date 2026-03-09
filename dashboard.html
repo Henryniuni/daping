@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>千川直播聚合监控中心</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <!-- 顶部工具栏 -->
+  <header class="header-bar">
+    <div class="header-left">
+      <h1>📊 千川直播聚合监控中心</h1>
+      <span class="subtitle">实时多账号数据大屏</span>
+    </div>
+    <div class="header-right">
+      <button id="btn-refresh-all" class="btn">🔄 全部刷新</button>
+      <button id="btn-clear-all" class="btn btn-danger">🗑️ 清空全部</button>
+      <div class="layout-selector">
+        <span>布局:</span>
+        <select id="layout-select">
+          <option value="1">1×1</option>
+          <option value="2" selected>2×2</option>
+          <option value="3">3×3</option>
+          <option value="4">4×4</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主体容器 -->
+  <main id="container" class="container layout-2">
+    <!-- 空状态（默认显示） -->
+    <div id="empty-state" class="empty-state">
+      <div class="empty-icon">📭</div>
+      <div class="empty-title">暂无直播间数据</div>
+      <div class="empty-tip">请在千川页面点击插件图标，选择"捕获当前大屏"</div>
+    </div>
+  </main>
+
+  <!-- 底部栏 -->
+  <footer class="footer">
+    💡 提示：如显示"拒绝连接"，请确保已在千川页面登录
+  </footer>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>

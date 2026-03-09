@@ -1,0 +1,354 @@
+/* ============================================
+   千川直播聚合监控中心 - Dashboard 样式
+   视觉风格：深色科技风
+   ============================================ */
+
+/* 基础重置 */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* 全局样式 */
+body {
+  background-color: #0f0f1e;
+  color: #ffffff;
+  height: 100vh;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================
+   顶部工具栏
+   ============================================ */
+
+.header-bar {
+  height: 60px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-bottom: 1px solid #2a2a4a;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.header-left h1 {
+  font-size: 20px;
+  font-weight: 600;
+  background: linear-gradient(90deg, #ff0050 0%, #ff4d8f 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: #8b92b9;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 按钮样式 */
+.btn {
+  padding: 8px 16px;
+  background-color: #2a2a4a;
+  border: 1px solid #3a3a6a;
+  color: #ffffff;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn:hover {
+  background-color: #3a3a6a;
+  transform: translateY(-1px);
+}
+
+.btn:active {
+  transform: translateY(0);
+}
+
+.btn-danger:hover {
+  background-color: #ff4d4f;
+  border-color: #ff4d4f;
+}
+
+/* 布局选择器 */
+.layout-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #8b92b9;
+}
+
+.layout-selector select {
+  background-color: #1a1a2e;
+  border: 1px solid #3a3a6a;
+  color: #ffffff;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  outline: none;
+}
+
+.layout-selector select:hover {
+  border-color: #ff0050;
+}
+
+.layout-selector select:focus {
+  border-color: #ff0050;
+  box-shadow: 0 0 0 2px rgba(255, 0, 80, 0.2);
+}
+
+/* ============================================
+   主体容器
+   ============================================ */
+
+.container {
+  flex: 1;
+  padding: 20px;
+  min-height: 0;
+  overflow-y: auto; /* 页面整体可滚动 */
+  overflow-x: hidden;
+  display: grid;
+  gap: 16px;
+  align-content: start; /* 从顶部开始排列 */
+}
+
+/* 布局类 - 流式布局，卡片有固定高度 */
+.layout-1 {
+  grid-template-columns: 1fr;
+}
+
+.layout-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.layout-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.layout-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+/* ============================================
+   Grid Item 卡片
+   ============================================ */
+
+.grid-item {
+  background-color: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  transition: all 0.3s ease;
+  height: 600px; /* 固定高度 */
+}
+
+.grid-item:hover {
+  border-color: #ff0050;
+  box-shadow: 0 0 20px rgba(255, 0, 80, 0.2);
+}
+
+/* Item Header */
+.item-header {
+  height: 36px;
+  background-color: #252540;
+  padding: 0 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #2a2a4a;
+  flex-shrink: 0;
+}
+
+.item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 70%;
+}
+
+/* Scale Display */
+.scale-display {
+  font-size: 11px;
+  color: #8b92b9;
+  margin-left: 8px;
+  flex-shrink: 0;
+  background-color: #1a1a2e;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.item-index {
+  font-size: 11px;
+  color: #5c6380;
+  margin-right: 8px;
+  background-color: #1a1a2e;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.item-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.icon-btn {
+  width: 22px;
+  height: 22px;
+  background-color: transparent;
+  border: none;
+  color: #8b92b9;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  transition: all 0.2s ease;
+}
+
+.icon-btn:hover {
+  color: #ff0050;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Iframe Wrapper */
+.iframe-wrapper {
+  flex: 1;
+  position: relative;
+  overflow: hidden; /* 裁剪缩放后的溢出 */
+  background-color: #000;
+}
+
+/* Iframe - 缩放模式 */
+.grid-item iframe {
+  border: none;
+  background-color: #000;
+  transform-origin: top left;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* Loading */
+.loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #ff0050;
+  font-size: 24px;
+  animation: pulse 1.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ============================================
+   空状态
+   ============================================ */
+
+.empty-state {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #8b92b9;
+  height: 100%;
+}
+
+.empty-icon {
+  font-size: 64px;
+  opacity: 0.5;
+  margin-bottom: 16px;
+}
+
+.empty-title {
+  font-size: 18px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: #ffffff;
+}
+
+.empty-tip {
+  font-size: 13px;
+  color: #5c6380;
+}
+
+/* ============================================
+   底部栏
+   ============================================ */
+
+.footer {
+  height: 40px;
+  background-color: #1a1a2e;
+  border-top: 1px solid #2a2a4a;
+  font-size: 12px;
+  color: #5c6380;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ============================================
+   滚动条样式
+   ============================================ */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a2e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3a3a6a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #ff0050;
+}
