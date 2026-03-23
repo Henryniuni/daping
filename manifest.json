@@ -13,7 +13,8 @@
   ],
   "host_permissions": [
     "https://qianchuan.jinritemai.com/*",
-    "https://buyin.jinritemai.com/*"
+    "https://buyin.jinritemai.com/*",
+    "https://business.oceanengine.com/*"
   ],
   "declarative_net_request": {
     "rule_resources": [
@@ -35,7 +36,8 @@
     {
       "matches": [
         "https://qianchuan.jinritemai.com/*",
-        "https://buyin.jinritemai.com/*"
+        "https://buyin.jinritemai.com/*",
+        "https://business.oceanengine.com/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

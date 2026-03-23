@@ -58,6 +58,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleSaveBoards(data, sendResponse);
       return true; // 异步响应
 
+    case 'autoCollectBoards':
+      // 自动采集所有直播大屏
+      handleAutoCollectBoards(data, sendResponse);
+      return true; // 异步响应
+
     default:
       sendResponse({ success: false, error: '未知 action: ' + action });
       return false;
@@ -69,40 +74,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // ============================================
 
 /**
- * 保存看板链接
+ * 保存看板链接（内部 Promise 版本，供 autoCollectBoards 直接调用）
+ * @param {string} url
+ * @param {string} [title]
+ * @returns {Promise<{success: boolean, count?: number, error?: string}>}
+ */
+function saveBoardInternal(url, title) {
+  return new Promise((resolve) => {
+    if (!url) {
+      resolve({ success: false, error: '缺少 URL 参数' });
+      return;
+    }
+
+    chrome.storage.local.get(['boards'], (result) => {
+      const boards = result.boards || [];
+
+      const isDuplicate = boards.some(board => board.url === url);
+      if (isDuplicate) {
+        resolve({ success: false, error: '该链接已存在', count: boards.length });
+        return;
+      }
+
+      const newBoard = {
+        id: Date.now(),
+        url,
+        title: title || '未命名看板',
+        timestamp: new Date().toISOString()
+      };
+
+      boards.push(newBoard);
+      chrome.storage.local.set({ boards }, () => {
+        resolve({ success: true, count: boards.length, board: newBoard });
+      });
+    });
+  });
+}
+
+/**
+ * 保存看板链接（消息处理器版本）
  * @param {Object} data - { url: string, title: string }
  * @param {Function} sendResponse - 响应回调
  */
 function handleSaveBoardUrl(data, sendResponse) {
-  if (!data || !data.url) {
-    sendResponse({ success: false, error: '缺少 URL 参数' });
-    return;
-  }
-
-  chrome.storage.local.get(['boards'], (result) => {
-    const boards = result.boards || [];
-
-    // 检查是否已存在相同 URL
-    const isDuplicate = boards.some(board => board.url === data.url);
-    if (isDuplicate) {
-      sendResponse({ success: false, error: '该链接已存在', count: boards.length });
-      return;
-    }
-
-    // 创建新看板项
-    const newBoard = {
-      id: Date.now(),
-      url: data.url,
-      title: data.title || '未命名看板',
-      timestamp: new Date().toISOString()
-    };
-
-    // 添加到数组并保存
-    boards.push(newBoard);
-    chrome.storage.local.set({ boards }, () => {
-      sendResponse({ success: true, count: boards.length, board: newBoard });
-    });
-  });
+  saveBoardInternal(data && data.url, data && data.title)
+    .then(sendResponse);
 }
 
 /**
@@ -201,4 +216,223 @@ function handleSaveBoards(data, sendResponse) {
   chrome.storage.local.set({ boards: data.boards }, () => {
     sendResponse({ success: true, count: data.boards.length });
   });
+}
+
+// ============================================
+// 自动采集直播大屏
+// ============================================
+
+/**
+ * 等待指定 Tab 加载完成
+ * 必须在 chrome.tabs.create 之前调用，以避免监听器注册竞态
+ * @param {number} tabId
+ * @param {number} [timeoutMs=15000]
+ * @returns {Promise<boolean>} true=加载完成, false=超时
+ */
+function waitForTabComplete(tabId, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let timer;
+
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(listener);
+        clearTimeout(timer);
+        resolve(true);
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(listener);
+
+    timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve(false);
+    }, timeoutMs);
+  });
+}
+
+/**
+ * 向指定 Tab 发送消息，带超时保护
+ * @param {number} tabId
+ * @param {Object} message
+ * @param {number} [timeoutMs=10000]
+ * @returns {Promise<any>}
+ */
+function sendMessageToTab(tabId, message, timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    try {
+      chrome.tabs.sendMessage(tabId, message, (response) => {
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) {
+          resolve(null);
+        } else {
+          resolve(response);
+        }
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      resolve(null);
+    }
+  });
+}
+
+/**
+ * 自动采集所有直播大屏
+ * @param {Object} data - { tabId: number } ECP 页面的 Tab ID
+ * @param {Function} sendResponse
+ */
+async function handleAutoCollectBoards(data, sendResponse) {
+  const ecpTabId = data && data.tabId;
+  if (!ecpTabId) {
+    sendResponse({ success: false, error: '缺少 tabId 参数' });
+    return;
+  }
+
+  sendResponse({ success: true, message: '采集已启动' });
+
+  // 1. 扫描 ECP 页面获取所有 aavid
+  const scanResult = await sendMessageToTab(ecpTabId, { action: 'scanAccounts' });
+  const aavids = scanResult && scanResult.aavids;
+
+  if (!aavids || aavids.length === 0) {
+    await chrome.storage.local.set({
+      collectProgress: { status: 'error', error: '未找到千川账号，请确认当前页面为 ECP 多账号管理页' }
+    });
+    return;
+  }
+
+  // 2. 初始化进度
+  let found = 0;
+  let skippedAccounts = 0;
+  await chrome.storage.local.set({
+    collectProgress: {
+      status: 'running',
+      startedAt: Date.now(),
+      total: aavids.length,
+      current: 0,
+      found: 0,
+      skippedAccounts: 0
+    }
+  });
+
+  // 3. 串行处理每个 aavid
+  for (let i = 0; i < aavids.length; i++) {
+    const aavid = aavids[i];
+    let listTabId = null;
+
+    try {
+      // 打开计划列表页（在注册监听器之后）
+      const listUrl = `https://qianchuan.jinritemai.com/uni-prom?aavid=${aavid}`;
+      const waitPromise = new Promise((resolve) => {
+        let timer;
+        function listener(updatedTabId, changeInfo) {
+          if (changeInfo.status === 'complete') {
+            // tabId 在 create 回调后才知道，通过闭包共享
+            if (listTabId !== null && updatedTabId === listTabId) {
+              chrome.tabs.onUpdated.removeListener(listener);
+              clearTimeout(timer);
+              resolve(true);
+            }
+          }
+        }
+        chrome.tabs.onUpdated.addListener(listener);
+        timer = setTimeout(() => {
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve(false);
+        }, 15000);
+      });
+
+      const listTab = await chrome.tabs.create({ url: listUrl, active: false });
+      listTabId = listTab.id;
+
+      const loaded = await waitPromise;
+      if (!loaded) {
+        skippedAccounts++;
+        continue;
+      }
+
+      // 等待 SPA 渲染
+      await new Promise(r => setTimeout(r, 2000));
+
+      // 扫描投放中的计划
+      const campaignResult = await sendMessageToTab(listTabId, { action: 'scanLiveCampaigns' });
+      const adIds = campaignResult && campaignResult.adIds;
+
+      if (!adIds || adIds.length === 0) {
+        skippedAccounts++;
+        continue;
+      }
+
+      // 4. 串行处理每个 adId
+      for (const adId of adIds) {
+        let detailTabId = null;
+        try {
+          const detailUrl = `https://qianchuan.jinritemai.com/uni-prom/detail?aavid=${aavid}&adId=${adId}&ct=1&dr=${new Date().toISOString().slice(0,10)},${new Date().toISOString().slice(0,10)}`;
+
+          const detailWaitPromise = new Promise((resolve) => {
+            let timer;
+            function listener(updatedTabId, changeInfo) {
+              if (changeInfo.status === 'complete') {
+                if (detailTabId !== null && updatedTabId === detailTabId) {
+                  chrome.tabs.onUpdated.removeListener(listener);
+                  clearTimeout(timer);
+                  resolve(true);
+                }
+              }
+            }
+            chrome.tabs.onUpdated.addListener(listener);
+            timer = setTimeout(() => {
+              chrome.tabs.onUpdated.removeListener(listener);
+              resolve(false);
+            }, 15000);
+          });
+
+          const detailTab = await chrome.tabs.create({ url: detailUrl, active: false });
+          detailTabId = detailTab.id;
+
+          const detailLoaded = await detailWaitPromise;
+          if (!detailLoaded) continue;
+
+          await new Promise(r => setTimeout(r, 2000));
+
+          const boardResult = await sendMessageToTab(detailTabId, { action: 'extractBoardUrl' });
+          if (boardResult && boardResult.url) {
+            const saveResult = await saveBoardInternal(boardResult.url, boardResult.title || '直播大屏');
+            if (saveResult.success) found++;
+          }
+        } finally {
+          if (detailTabId !== null) {
+            try { await chrome.tabs.remove(detailTabId); } catch (e) { /* 已关闭 */ }
+          }
+        }
+      }
+
+    } catch (e) {
+      console.error('[千川看板] 处理账号出错:', aavid, e);
+      skippedAccounts++;
+    } finally {
+      if (listTabId !== null) {
+        try { await chrome.tabs.remove(listTabId); } catch (e) { /* 已关闭 */ }
+      }
+    }
+
+    // 更新进度
+    await chrome.storage.local.set({
+      collectProgress: {
+        status: 'running',
+        startedAt: Date.now(),
+        total: aavids.length,
+        current: i + 1,
+        found,
+        skippedAccounts
+      }
+    });
+  }
+
+  // 5. 全部完成
+  await chrome.storage.local.set({
+    collectProgress: { status: 'done', total: aavids.length, found, skippedAccounts }
+  });
+
+  chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
 }

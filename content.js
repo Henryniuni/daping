@@ -39,6 +39,24 @@
         }
         return false;
 
+      case 'scanAccounts':
+        // 扫描 ECP 页面，提取所有千川账号 aavid
+        console.log(`${LOG_PREFIX} 扫描 ECP 账号列表`);
+        sendResponse({ aavids: scanAccounts() });
+        return false;
+
+      case 'scanLiveCampaigns':
+        // 扫描计划列表页，提取投放中计划的 adId
+        console.log(`${LOG_PREFIX} 扫描投放中计划`);
+        sendResponse({ adIds: scanLiveCampaigns() });
+        return false;
+
+      case 'extractBoardUrl':
+        // 从计划详情页提取直播大屏 URL
+        console.log(`${LOG_PREFIX} 提取直播大屏 URL`);
+        sendResponse(extractBoardUrl());
+        return false;
+
       default:
         sendResponse({ success: false, error: '未知 action: ' + action });
         return false;
@@ -462,6 +480,108 @@
     document.addEventListener('DOMContentLoaded', init);
   } else {
     init();
+  }
+
+  // ============================================
+  // 自动采集：扫描函数
+  // ============================================
+
+  /**
+   * 扫描 ECP 多账号管理页，提取所有千川账号 aavid
+   * @returns {string[]}
+   */
+  function scanAccounts() {
+    const aavids = new Set();
+    const links = document.querySelectorAll('a[href]');
+    const pattern = /[?&]aavid=(\d+)/;
+
+    links.forEach(link => {
+      const match = link.href && link.href.match(pattern);
+      if (match) aavids.add(match[1]);
+    });
+
+    console.log(`${LOG_PREFIX} 扫描到 aavid:`, [...aavids]);
+    return [...aavids];
+  }
+
+  /**
+   * 扫描计划列表页，提取"投放中"计划的 adId
+   * @returns {string[]}
+   */
+  function scanLiveCampaigns() {
+    const adIds = new Set();
+    const adIdPattern = /[?&]adId=(\d+)/;
+
+    // 策略一：找"投放中"文字元素，向上找行容器，再从行内链接提取 adId
+    const allElements = document.querySelectorAll('*');
+    for (const el of allElements) {
+      if (el.children.length === 0 && el.textContent.trim() === '投放中') {
+        // 向上最多 10 层找行容器
+        let row = el.parentElement;
+        for (let depth = 0; depth < 10 && row; depth++) {
+          const links = row.querySelectorAll('a[href]');
+          let found = false;
+          links.forEach(link => {
+            const match = link.href && link.href.match(adIdPattern);
+            if (match) {
+              adIds.add(match[1]);
+              found = true;
+            }
+          });
+          if (found) break;
+          row = row.parentElement;
+        }
+      }
+    }
+
+    // 策略二（兜底）：找所有含 adId= 的链接，过滤父容器含"投放中"
+    if (adIds.size === 0) {
+      const links = document.querySelectorAll('a[href]');
+      links.forEach(link => {
+        const match = link.href && link.href.match(adIdPattern);
+        if (match) {
+          // 检查该链接的祖先容器内是否有"投放中"文字
+          let parent = link.parentElement;
+          for (let depth = 0; depth < 8 && parent; depth++) {
+            if (parent.textContent.includes('投放中')) {
+              adIds.add(match[1]);
+              break;
+            }
+            parent = parent.parentElement;
+          }
+        }
+      });
+    }
+
+    console.log(`${LOG_PREFIX} 扫描到投放中 adId:`, [...adIds]);
+    return [...adIds];
+  }
+
+  /**
+   * 从计划详情页提取直播大屏 URL
+   * @returns {{ url: string|null, title: string|null }}
+   */
+  function extractBoardUrl() {
+    // 策略一：找文字含"直播大屏"的 <a> 标签
+    const allLinks = document.querySelectorAll('a');
+    for (const link of allLinks) {
+      const text = link.textContent.trim();
+      if (text.includes('直播大屏') && link.href && link.href.includes('board-next') && link.href.includes('live_room_id=')) {
+        console.log(`${LOG_PREFIX} 找到直播大屏链接(文字匹配):`, link.href);
+        return { url: link.href, title: null };
+      }
+    }
+
+    // 策略二（兜底）：找所有 href 含 board-next 的 <a>
+    for (const link of allLinks) {
+      if (link.href && link.href.includes('board-next') && link.href.includes('live_room_id=')) {
+        console.log(`${LOG_PREFIX} 找到直播大屏链接(URL匹配):`, link.href);
+        return { url: link.href, title: null };
+      }
+    }
+
+    console.log(`${LOG_PREFIX} 未找到直播大屏链接`);
+    return { url: null, title: null };
   }
 
 })();

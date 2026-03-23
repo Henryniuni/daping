@@ -18,7 +18,11 @@
   const btnCapture = document.getElementById('btn-capture');
   const btnAuto = document.getElementById('btn-auto');
   const btnOpen = document.getElementById('btn-open');
+  const btnAutoCollect = document.getElementById('btn-auto-collect');
+  const collectProgressEl = document.getElementById('collect-progress');
   const boardCountEl = document.getElementById('board-count');
+
+  let collectPollInterval = null;
 
   // ============================================
   // 初始化
@@ -29,7 +33,10 @@
     
     // 获取已保存的看板数量
     loadBoardCount();
-    
+
+    // 检测当前页面，决定是否显示自动采集按钮
+    detectPageAndShowCollectBtn();
+
     // 绑定按钮事件
     bindEvents();
   });
@@ -82,6 +89,9 @@
 
     // 打开聚合看板
     btnOpen.addEventListener('click', handleOpenDashboard);
+
+    // 自动采集所有直播大屏（仅 ECP 页面显示）
+    btnAutoCollect.addEventListener('click', handleAutoCollect);
   }
 
   // ============================================
@@ -188,11 +198,143 @@
     console.log('[千川看板 Popup] 点击打开看板按钮');
 
     const dashboardUrl = chrome.runtime.getURL('dashboard.html');
-    
+
     chrome.tabs.create({ url: dashboardUrl }, () => {
-      // 关闭 popup
       window.close();
     });
+  }
+
+  // ============================================
+  // 自动采集功能
+  // ============================================
+
+  /**
+   * 检测当前页面，若为 ECP 页面则显示自动采集按钮
+   * 同时恢复上次采集进度状态
+   */
+  async function detectPageAndShowCollectBtn() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab && tab.url && tab.url.includes('business.oceanengine.com')) {
+      btnAutoCollect.style.display = '';
+    }
+
+    // 恢复上次进度状态（若仍在运行则自动恢复轮询）
+    const { collectProgress } = await chrome.storage.local.get('collectProgress');
+    if (collectProgress) {
+      renderProgress(collectProgress);
+      if (collectProgress.status === 'running') {
+        // 检查是否过期（5分钟）
+        if (Date.now() - (collectProgress.startedAt || 0) > 5 * 60 * 1000) {
+          await chrome.storage.local.set({ collectProgress: { status: 'idle' } });
+          renderProgress(null);
+        } else {
+          // 恢复轮询
+          btnAutoCollect.disabled = true;
+          startProgressPolling();
+        }
+      }
+    }
+  }
+
+  /**
+   * 处理自动采集按钮点击
+   */
+  async function handleAutoCollect() {
+    console.log('[千川看板 Popup] 点击自动采集按钮');
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) return;
+
+    btnAutoCollect.disabled = true;
+
+    chrome.runtime.sendMessage(
+      { action: 'autoCollectBoards', tabId: tab.id },
+      (response) => {
+        if (chrome.runtime.lastError || !response || !response.success) {
+          const err = (response && response.error) || '启动失败，请刷新页面重试';
+          showProgress('❌ ' + err, 'error');
+          btnAutoCollect.disabled = false;
+          return;
+        }
+        startProgressPolling();
+      }
+    );
+  }
+
+  /**
+   * 启动每秒轮询进度
+   */
+  function startProgressPolling() {
+    if (collectPollInterval) clearInterval(collectPollInterval);
+    collectPollInterval = setInterval(pollProgress, 1000);
+  }
+
+  /**
+   * 轮询一次进度并更新显示
+   */
+  async function pollProgress() {
+    const { collectProgress } = await chrome.storage.local.get('collectProgress');
+    if (!collectProgress) return;
+
+    // 检查过期
+    if (collectProgress.status === 'running' &&
+        Date.now() - (collectProgress.startedAt || 0) > 5 * 60 * 1000) {
+      await chrome.storage.local.set({ collectProgress: { status: 'idle' } });
+      clearInterval(collectPollInterval);
+      collectPollInterval = null;
+      btnAutoCollect.disabled = false;
+      showProgress('⚠️ 上次采集已中断，请重新点击', 'warn');
+      return;
+    }
+
+    renderProgress(collectProgress);
+
+    if (collectProgress.status === 'done' || collectProgress.status === 'error') {
+      clearInterval(collectPollInterval);
+      collectPollInterval = null;
+      btnAutoCollect.disabled = false;
+      loadBoardCount();
+    }
+  }
+
+  /**
+   * 根据进度对象渲染进度区域
+   * @param {Object|null} progress
+   */
+  function renderProgress(progress) {
+    if (!progress || progress.status === 'idle') {
+      collectProgressEl.style.display = 'none';
+      return;
+    }
+
+    collectProgressEl.style.display = '';
+
+    switch (progress.status) {
+      case 'running':
+        showProgress(
+          `⏳ 正在检查 ${progress.current}/${progress.total} 个账号，已找到 ${progress.found} 个大屏...`,
+          'running'
+        );
+        break;
+      case 'done':
+        showProgress(
+          `✅ 完成！找到 ${progress.found} 个直播大屏（跳过 ${progress.skippedAccounts} 个账号）`,
+          'done'
+        );
+        break;
+      case 'error':
+        showProgress('❌ ' + (progress.error || '采集失败'), 'error');
+        break;
+    }
+  }
+
+  /**
+   * 显示进度文字
+   * @param {string} text
+   */
+  function showProgress(text) {
+    collectProgressEl.style.display = '';
+    collectProgressEl.textContent = text;
   }
 
 })();
