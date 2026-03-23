@@ -17,8 +17,8 @@
 | 千川计划详情页 | `qianchuan.jinritemai.com/uni-prom/detail?aavid={aavid}&adId={adId}` |
 | 直播大屏页 | `qianchuan.jinritemai.com/board-next?live_room_id={live_room_id}&aavid={aavid}` |
 
-**判断"正在直播"的依据**：计划详情或列表页出现"投放中"状态文字。
-**大屏 URL 获取方式**：计划详情页上"直播大屏"红色按钮的 href，包含 `live_room_id`。
+**判断"正在直播"的依据**：计划详情页或列表页出现"投放中"文字的状态元素。
+**大屏 URL 获取方式**：计划详情页"直播大屏"红色 `<a>` 标签的 `href` 属性（包含 `live_room_id`），直接读取 href 属性，无需点击。
 
 ---
 
@@ -28,34 +28,38 @@
 用户点击 Popup "🚀 自动采集所有直播大屏"
          │
          ▼
-[background] 向 ECP 页面 content script 发送 scanAccounts 指令
+[popup] 将当前 Tab ID 写入消息，发送 autoCollectBoards 给 background
+        同时禁用按钮（防止重复点击），开始每秒轮询 collectProgress
          │
          ▼
-[ecp content] 扫描 ECP 页面 DOM，提取所有千川账号 aavid 列表
-         │  返回 [aavid1, aavid2, ...]
+[background] 向指定 ECP Tab 发送 scanAccounts 指令
+             若返回 aavid 为空，写入 collectProgress = { status: 'error', error: '未找到千川账号' }，退出
+         │
          ▼
-[background] 串行处理每个 aavid：
-  ├─ 打开新 Tab → /uni-prom?aavid=XXX（静默，不激活）
-  ├─ 等待页面加载完成（MutationObserver 或 onUpdated 事件）
-  ├─ 向该 Tab 的 content script 发送 scanLiveCampaigns 指令
-  ├─ [content] 扫描页面找"投放中"计划行，提取每行的 adId
-  ├─ 关闭该 Tab
+[background] 写入初始进度到 storage：
+             collectProgress = { status: 'running', total: N, current: 0, found: 0, skippedAccounts: 0 }
+             串行处理每个 aavid：
+  ├─ 在 chrome.tabs.create 之前注册 onUpdated 监听器（按 tabId 过滤）
+  ├─ 打开新 Tab → /uni-prom?aavid=XXX（active: false）
+  ├─ 等待该 Tab status==='complete'（监听器收到后移除自身），再 setTimeout(2000)
+  │   若 15 秒内未收到 complete，超时处理：移除监听器
+  ├─ try { 发送 scanLiveCampaigns } finally { 关闭该 Tab }
+  ├─ 若返回 adIds 为空，skippedAccounts+1，继续下一个 aavid
   │
   ├─ 串行处理每个 adId：
-  │    ├─ 打开新 Tab → /uni-prom/detail?aavid=XXX&adId=YYY（静默）
-  │    ├─ 等待页面加载
-  │    ├─ 向该 Tab 的 content script 发送 extractBoardUrl 指令
-  │    ├─ [content] 找"直播大屏"按钮，提取 href 中的 live_room_id
-  │    ├─ 构造 board URL，发送 saveBoardUrl 存储（去重）
-  │    └─ 关闭该 Tab
+  │    ├─ 在 create 之前注册 onUpdated 监听器（按 tabId 过滤）
+  │    ├─ 打开新 Tab → /uni-prom/detail?aavid=XXX&adId=YYY（active: false）
+  │    ├─ 等待 status==='complete' + 2秒（监听器收到后移除自身）
+  │    │   若 15 秒超时，移除监听器
+  │    ├─ try { 发送 extractBoardUrl } finally { 关闭该 Tab }
+  │    └─ 若返回 url 非空，调用 saveBoardInternal(url, title)
   │
-  └─ 更新 popup 进度（正在检查 N/M 个账号...）
+  └─ 更新 collectProgress.current++
          │
          ▼
-[background] 所有账号处理完毕
-         │
-         ▼
-打开聚合看板（dashboard.html）
+[background] 全部完成：
+             collectProgress = { status: 'done', total: N, found: M, skippedAccounts: K }
+             chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') })
 ```
 
 ---
@@ -63,42 +67,105 @@
 ## 各组件改动说明
 
 ### manifest.json
-- `host_permissions` 新增 `https://business.oceanengine.com/*`
-- `content_scripts` 新增匹配规则覆盖 `business.oceanengine.com`（可复用 content.js 或新建 ecp_content.js）
 
-### background.js 新增消息处理器
+- `host_permissions` 数组中新增 `"https://business.oceanengine.com/*"`
+- `content_scripts` **现有唯一条目**的 `matches` 数组中追加 `"https://business.oceanengine.com/*"`（复用同一个 content.js 文件，不新增第二个 content_scripts 条目，否则 content.js 会在 qianchuan 页面被注入两次）
+- 这两处修改必须同时完成：`host_permissions` 缺失会导致 `chrome.tabs.sendMessage` 无法到达 ECP Tab；`content_scripts.matches` 缺失会导致 ECP 页面无 content script 可接收消息
+- `rules.json` **不需要修改**：ECP 页面只被脚本扫描，不做 iframe 嵌入
+- 现有 `"scripting"` 权限已足够向非活动 Tab 发消息
 
-**`autoCollectBoards`**
-- 接收来自 popup 的触发指令
-- 获取 ECP 页面当前 Tab，发送 `scanAccounts` 指令
-- 串行处理 aavid 列表，管理临时 Tab 的生命周期
-- 每步完成后通过 `chrome.runtime.sendMessage` 推送进度到 popup
-- 全部完成后打开 `dashboard.html`
+### background.js 改动
 
-**Tab 等待策略**：监听 `chrome.tabs.onUpdated` 事件，等 `status === 'complete'` 后再发消息给 content script，再加 1-2 秒延时等待 SPA 渲染。
+**新增 `saveBoardInternal(url, title)` 函数**（替代直接调用 `handleSaveBoardUrl`）
+- `handleSaveBoardUrl` 原本依赖 `sendResponse` 回调，内部调用会崩溃
+- 新增一个返回 Promise 的内部函数，包含与 `handleSaveBoardUrl` 相同的去重+保存逻辑
+- `handleSaveBoardUrl` 消息处理器改为调用 `saveBoardInternal`，再把结果传给 `sendResponse`
 
-### content.js 新增消息处理器
+```javascript
+// 新函数签名：
+async function saveBoardInternal(url, title) → Promise<{ success, count?, error? }>
+```
 
-**`scanAccounts`**（在 ECP 页面执行）
-- 扫描 DOM 中包含千川账号 ID 的元素
-- 提取所有 `aavid`（数字 ID），去重后返回数组
+**新增 `autoCollectBoards` 消息处理器**
+- 在现有 `switch (action)` 中新增 `case 'autoCollectBoards':` 并 `return true`（异步响应）
+- 入参：`{ tabId }` — popup 传入的当前 ECP Tab ID
+- Tab 等待工具函数：`waitForTabComplete(tabId, timeoutMs=15000)` → Promise，在 `chrome.tabs.create` 之前注册监听，收到 complete 或超时后自动移除监听器，避免泄漏
+- 所有 Tab 操作用 `try/finally` 包裹，finally 中调用 `chrome.tabs.remove(tabId)` 确保 Tab 必被关闭
+- 打开看板用 `chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') })`
 
-**`scanLiveCampaigns`**（在 `/uni-prom` 计划列表页执行）
-- 扫描页面中状态为"投放中"的计划行
-- 提取每行的 `adId`（从行内链接 href 或 data 属性获取）
-- 返回 `adId` 数组
+### content.js 改动
 
-**`extractBoardUrl`**（在 `/uni-prom/detail` 详情页执行）
-- 查找文字为"直播大屏"的按钮/链接
-- 提取其 href，解析出 `live_room_id` 参数
-- 构造并返回完整的 `board-next` URL
+**在现有 `switch (action)` 中新增三个 case**（不新建文件）：
 
-### popup.js 新增逻辑
+**`scanAccounts` case**（在 ECP 页面执行）
+- 主策略：`document.querySelectorAll('a[href]')` 遍历，用正则 `/[?&]aavid=(\d+)/` 提取每个链接的 aavid
+- 仅此策略，去除"扫描16-19位数字文本节点"兜底（范围过宽，会误匹配订单号等）
+- 若主策略无结果则返回空数组，由 background 报错给用户
+- 返回：`{ aavids: ['123...', '456...'] }`
 
-- 检测当前 Tab 是否在 `business.oceanengine.com`，是则显示"🚀 自动采集所有直播大屏"按钮
-- 按钮点击后进入 loading 状态，展示进度文字
-- 监听来自 background 的进度消息，实时更新显示
-- 完成后显示结果摘要（找到 N 个直播大屏）
+**`scanLiveCampaigns` case**（在 `/uni-prom` 计划列表页执行）
+- 策略一：找所有文字含"投放中"的元素，向上遍历到最近的行容器，从该行所有链接 href 中正则提取 `adId=(\d+)`
+- 策略二（兜底）：找页面所有 href 含 `adId=` 的链接，过滤其父级容器内是否有"投放中"文字
+- 若页面无"投放中"文字（未登录跳转登录页），自然返回 `{ adIds: [] }`
+- 返回：`{ adIds: ['111...', '222...'] }`
+
+**`extractBoardUrl` case**（在 `/uni-prom/detail` 详情页执行）
+- 策略一：`document.querySelectorAll('a')` 遍历，找 `textContent` 含"直播大屏"的 `<a>` 标签，读其 `href`
+- 策略二（兜底）：找所有 `href` 含 `board-next` 的 `<a>` 标签
+- 验证 href 包含 `live_room_id=` 参数后返回
+- 返回：`{ url: 'https://...' }` 或 `{ url: null }`
+
+**ECP 页面上的 `init()` 行为**：
+- `isBoardPage()` 在 ECP 页面返回 false → 浮动按钮不显示（安全）
+- `MutationObserver` 会在 ECP 页面启动，观察 DOM 变化（无害，因为 URL 变化检测只在 board-next 页才触发操作）
+
+### popup.js 改动
+
+**按钮显示条件**：检测当前 Tab URL 是否包含 `business.oceanengine.com`，是则渲染"🚀 自动采集所有直播大屏"按钮。
+
+**点击处理**：
+1. 立即禁用按钮（`button.disabled = true`），防止重复点击
+2. 发送 `autoCollectBoards` 消息，传入当前 tabId
+3. 启动轮询：`intervalId = setInterval(pollProgress, 1000)`
+
+**轮询 `pollProgress()`**：
+- 读取 `chrome.storage.local.get('collectProgress')`
+- `status === 'running'`：显示 `⏳ 正在检查 {current}/{total} 个账号，已找到 {found} 个大屏...`
+- `status === 'done'`：显示 `✅ 完成！找到 {found} 个直播大屏（跳过 {skippedAccounts} 个账号）`，调用 `clearInterval(intervalId)`，恢复按钮
+- `status === 'error'`：显示错误信息，调用 `clearInterval(intervalId)`，恢复按钮
+- `collectProgress` 为 undefined（首次打开）：不显示进度，按钮正常可用
+
+---
+
+## 进度数据结构
+
+```javascript
+// 运行中（写入时同步记录时间戳）
+collectProgress = {
+  status: 'running',
+  startedAt: Date.now(),  // 用于检测过期状态
+  total: 8,               // 总账号数
+  current: 3,             // 已处理账号数
+  found: 2,               // 已找到并保存的大屏数
+  skippedAccounts: 1      // 跳过的账号数（无投放中/超时/未登录）
+}
+
+// 完成
+collectProgress = {
+  status: 'done',
+  total: 8,
+  found: 5,
+  skippedAccounts: 3
+}
+
+// 错误（在 running 开始前失败）
+collectProgress = {
+  status: 'error',
+  error: '未找到千川账号，请确认当前页面'
+}
+```
+
+**过期 running 状态处理**：popup 的 `pollProgress` 在读到 `status === 'running'` 时，检查 `Date.now() - startedAt > 5 * 60 * 1000`（5分钟）。若超期，视为 background service worker 已被 Chrome 终止，将 `collectProgress` 重置为 `{ status: 'idle' }`，恢复按钮可用状态并显示提示"上次采集已中断，请重新点击"。
 
 ---
 
@@ -106,17 +173,21 @@
 
 | 情况 | 处理方式 |
 |------|----------|
-| ECP 页面找不到任何 aavid | 提示用户"未找到千川账号，请确认当前页面" |
-| 某个账号没有投放中的计划 | 静默跳过，继续下一个账号 |
-| 详情页找不到"直播大屏"按钮 | 静默跳过该计划 |
-| 大屏 URL 已存在（重复） | 去重，不重复添加（已有逻辑） |
-| Tab 加载超时（>15秒） | 跳过该 Tab，记录错误，继续 |
-| 用户在采集中途关闭 popup | background 继续执行，完成后自动打开看板 |
+| ECP 页面未找到任何 aavid | 写入 error 状态到 storage，popup 显示错误，不打开看板 |
+| 账号未登录/跳转登录页 | `scanLiveCampaigns` 返回空数组，skippedAccounts+1，继续 |
+| 该账号没有投放中的计划 | 同上 |
+| 详情页找不到"直播大屏"链接 | 静默跳过该计划（不计入 skippedAccounts，属于计划级，非账号级） |
+| 大屏 URL 已存在（重复） | `saveBoardInternal` 内部去重，不重复添加 |
+| Tab 加载超时（>15秒） | 移除 onUpdated 监听器，finally 关闭 Tab，skippedAccounts+1 |
+| Tab 操作抛出异常 | try/finally 确保 Tab 关闭，异常 console.error，继续下一个 |
+| 用户中途关闭 popup | background 继续执行；popup 重新打开后从 storage 读当前进度 |
+| 用户重复点击按钮 | 按钮在运行期间处于 disabled 状态，无法触发第二次 |
 
 ---
 
 ## 不在本次范围内
 
 - 定时自动采集（Cron）
-- 多账号并行处理（当前串行，避免对千川服务器压力过大）
+- 多账号并行处理（串行，避免对千川服务器施压过大）
 - 跨浏览器支持（仅 Chrome/Chromium）
+- 自动刷新已有看板列表（本次只追加新发现的大屏）
