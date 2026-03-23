@@ -248,7 +248,7 @@
     btnAutoCollect.disabled = true;
 
     chrome.runtime.sendMessage(
-      { action: 'autoCollectBoards', tabId: tab.id },
+      { action: 'autoCollectBoards', data: { tabId: tab.id } },
       (response) => {
         if (chrome.runtime.lastError || !response || !response.success) {
           const err = (response && response.error) || '启动失败，请刷新页面重试';

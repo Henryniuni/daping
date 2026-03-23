@@ -492,13 +492,23 @@
    */
   function scanAccounts() {
     const aavids = new Set();
-    const links = document.querySelectorAll('a[href]');
-    const pattern = /[?&]aavid=(\d+)/;
 
-    links.forEach(link => {
-      const match = link.href && link.href.match(pattern);
+    // 策略一：从链接 href 中提取 aavid 参数
+    const hrefPattern = /[?&]aavid=(\d+)/;
+    document.querySelectorAll('a[href]').forEach(link => {
+      const match = link.href && link.href.match(hrefPattern);
       if (match) aavids.add(match[1]);
     });
+
+    // 策略二：从页面文字中提取 "ID: 数字" 格式（ECP账号列表常见格式）
+    if (aavids.size === 0) {
+      const textPattern = /ID[：:]\s*(\d{10,20})/g;
+      const bodyText = document.body.innerText || '';
+      let match;
+      while ((match = textPattern.exec(bodyText)) !== null) {
+        aavids.add(match[1]);
+      }
+    }
 
     console.log(`${LOG_PREFIX} 扫描到 aavid:`, [...aavids]);
     return [...aavids];
