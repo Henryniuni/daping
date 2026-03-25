@@ -171,12 +171,59 @@ body {
 }
 
 .collect-progress {
-  background-color: #f0f4ff;
-  border: 1px solid #c7d2fe;
+  background-color: #0f1117;
+  border: 1px solid #2d3748;
   border-radius: 6px;
-  padding: 10px 12px;
-  font-size: 12px;
-  color: #3730a3;
-  line-height: 1.6;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  line-height: 1.7;
   margin-top: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  color: #e2e8f0;
+}
+
+.collect-progress.done {
+  border-color: #276749;
+}
+
+.collect-progress.error {
+  border-color: #9f1239;
+}
+
+.collect-progress .log-success { color: #68d391; }
+.collect-progress .log-skip    { color: #a0aec0; }
+.collect-progress .log-error   { color: #fc8181; }
+.collect-progress .log-info    { color: #e2e8f0; }
+.btn-copy-log {
+  background-color: #2d3748;
+  color: #a0aec0;
+  font-size: 11px;
+  padding: 6px 12px;
+  margin-top: 4px;
+  border-radius: 4px;
+}
+.btn-copy-log:hover { background-color: #4a5568; color: #e2e8f0; }
+
+.btn-pause {
+  background-color: #744210;
+  color: #fbd38d;
+  border: 1px solid #975a16;
+  font-size: 13px;
+  padding: 8px 16px;
+}
+.btn-pause:hover:not(:disabled) { background-color: #975a16; }
+.btn-pause.resuming {
+  background-color: #1a365d;
+  color: #90cdf4;
+  border-color: #2b6cb0;
+}
+.btn-pause.resuming:hover:not(:disabled) { background-color: #2b6cb0; }
+
+.collect-progress .log-status  {
+  color: #fbd38d;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid #2d3748;
 }

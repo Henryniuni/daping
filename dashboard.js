@@ -17,7 +17,7 @@
   // ============================================
 
   let boards = [];
-  let currentLayout = 2;
+  let currentLayout = 1;
 
   // 千川大屏设计分辨率（标准 1920x1080）
   const DESIGN_WIDTH = 1920;
@@ -30,6 +30,9 @@
   let draggedItem = null;
   let draggedBoardId = null;
   let dragOverItem = null;
+
+  // 转写状态 Map：boardId → { ws, audioCtx, stream, finalText }
+  const transcriptionMap = new Map();
 
   // ============================================
   // DOM 元素引用
@@ -73,6 +76,52 @@
 
     // 清空全部按钮
     btnClearAll.addEventListener('click', clearAll);
+
+    // ASR 设置弹窗
+    const modal = document.getElementById('asr-settings-modal');
+    document.getElementById('btn-asr-settings').addEventListener('click', () => {
+      // 回填已保存的值
+      chrome.storage.local.get('asrCredentials', ({ asrCredentials }) => {
+        if (asrCredentials) {
+          document.getElementById('asr-appid').value = asrCredentials.appId || '';
+          document.getElementById('asr-secretid').value = asrCredentials.secretId || '';
+          document.getElementById('asr-secretkey').value = asrCredentials.secretKey || '';
+        }
+      });
+      modal.style.display = 'flex';
+    });
+
+    document.getElementById('btn-modal-close').addEventListener('click', () => {
+      modal.style.display = 'none';
+    });
+
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.style.display = 'none';
+    });
+
+    document.getElementById('btn-asr-save').addEventListener('click', () => {
+      const appId = document.getElementById('asr-appid').value.trim();
+      const secretId = document.getElementById('asr-secretid').value.trim();
+      const secretKey = document.getElementById('asr-secretkey').value.trim();
+      if (!appId || !secretId || !secretKey) {
+        alert('请填写全部三项凭证');
+        return;
+      }
+      chrome.storage.local.set({ asrCredentials: { appId, secretId, secretKey } }, () => {
+        modal.style.display = 'none';
+        console.log('[千川看板] ASR 凭证已保存');
+      });
+    });
+
+    document.getElementById('btn-asr-clear').addEventListener('click', () => {
+      if (!confirm('确定清除已保存的 ASR 凭证？')) return;
+      chrome.storage.local.remove('asrCredentials', () => {
+        document.getElementById('asr-appid').value = '';
+        document.getElementById('asr-secretid').value = '';
+        document.getElementById('asr-secretkey').value = '';
+        modal.style.display = 'none';
+      });
+    });
   }
 
   /**
@@ -221,9 +270,20 @@
     const btnRefresh = createIconButton('🔄', '刷新', () => refreshItem(board.id));
     const btnOpen = createIconButton('↗️', '新标签页打开', () => openNewTab(board.url));
     const btnRemove = createIconButton('✕', '删除', () => removeItem(board.id));
-    
+
+    // 麦克风按钮（仅 1×1 布局可见）
+    const btnMic = document.createElement('button');
+    btnMic.className = 'btn-mic';
+    btnMic.title = '开始/停止语音转写';
+    btnMic.textContent = '🎤';
+    btnMic.addEventListener('click', (e) => {
+      e.preventDefault();
+      toggleTranscription(item, board.id);
+    });
+
     actions.appendChild(btnRefresh);
     actions.appendChild(btnOpen);
+    actions.appendChild(btnMic);
     actions.appendChild(btnRemove);
     
     header.appendChild(titleArea);
@@ -246,6 +306,27 @@
       top: 0;
       left: 0;
     `;
+
+    // 创建转写覆盖层
+    const transcriptOverlay = document.createElement('div');
+    transcriptOverlay.className = 'transcript-overlay';
+    transcriptOverlay.style.display = 'none';
+
+    // 顶部工具栏
+    const transcriptToolbar = document.createElement('div');
+    transcriptToolbar.className = 'transcript-toolbar';
+    const btnDownload = document.createElement('button');
+    btnDownload.className = 'transcript-btn';
+    btnDownload.title = '下载转写文本';
+    btnDownload.textContent = '⬇ 下载';
+    btnDownload.addEventListener('click', () => downloadTranscript(board.id, board.title));
+    transcriptToolbar.appendChild(btnDownload);
+    transcriptOverlay.appendChild(transcriptToolbar);
+
+    const transcriptText = document.createElement('div');
+    transcriptText.className = 'transcript-text';
+    transcriptOverlay.appendChild(transcriptText);
+    iframeWrapper.appendChild(transcriptOverlay);
 
     // 创建 loading 提示
     const loading = document.createElement('div');
@@ -356,7 +437,21 @@
     
     // wrapper 裁剪溢出部分
     iframeWrapper.style.overflow = 'hidden';
-      
+
+    // 1×1 布局时更新转写覆盖层位置
+    const overlay = iframeWrapper.querySelector('.transcript-overlay');
+    if (overlay && currentLayout === 1) {
+      const iframeRight = Math.round(DESIGN_WIDTH * scale);
+      const wrapperWidth = containerWidth;
+      const overlayWidth = wrapperWidth - iframeRight;
+      if (overlayWidth > 40) {
+        overlay.style.left = iframeRight + 'px';
+        overlay.style.width = overlayWidth + 'px';
+        overlay.style.height = '100%';
+        overlay.style.top = '0';
+      }
+    }
+
     console.log(`[千川助手] 看板 #${boardId} 缩放: ${(scale * 100).toFixed(0)}%, 容器: ${containerWidth}x${containerHeight}`);
   }
 
@@ -371,11 +466,22 @@
   function changeLayout() {
     // 移除旧的布局类
     container.classList.remove('layout-1', 'layout-2', 'layout-3', 'layout-4');
-    
+
     // 添加新的布局类
     container.classList.add(`layout-${currentLayout}`);
 
     console.log('[千川看板 Dashboard] 切换布局:', currentLayout + '×' + currentLayout);
+
+    // 处理转写功能的显示/隐藏
+    if (currentLayout !== 1) {
+      // 非 1×1 布局：停止所有转写，隐藏覆盖层
+      transcriptionMap.forEach((state, boardId) => {
+        stopTranscription(boardId);
+      });
+      document.querySelectorAll('.transcript-overlay').forEach(el => {
+        el.style.display = 'none';
+      });
+    }
 
     // 布局切换后重新计算 iframe 尺寸（延迟确保渲染完成）
     setTimeout(() => {
@@ -660,6 +766,331 @@
     
     // 重新渲染
     renderBoards();
+  }
+
+  // ============================================
+  // 语音转写功能
+  // ============================================
+
+  /**
+   * 切换转写状态
+   * @param {HTMLElement} item - grid-item 元素
+   * @param {number} boardId - 看板 ID
+   */
+  function toggleTranscription(item, boardId) {
+    if (transcriptionMap.has(boardId)) {
+      stopTranscription(boardId);
+    } else {
+      startTranscription(item, boardId);
+    }
+  }
+
+  /**
+   * 开始转写
+   * @param {HTMLElement} item - grid-item 元素
+   * @param {number} boardId - 看板 ID
+   */
+  async function startTranscription(item, boardId) {
+    const btnMic = item.querySelector('.btn-mic');
+    const overlay = item.querySelector('.transcript-overlay');
+
+    if (!btnMic || !overlay) return;
+
+    try {
+      // 1. 使用 getDisplayMedia 捕获当前标签页音频
+      // （tabCapture 无法捕获 chrome-extension:// 页面，故改用此方案）
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,   // Chrome 要求必须请求 video
+        audio: {
+          suppressLocalAudioPlayback: false,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        },
+        preferCurrentTab: true
+      });
+
+      // 立即停止视频轨道，只保留音频
+      displayStream.getVideoTracks().forEach(t => t.stop());
+
+      const audioTracks = displayStream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        throw new Error('未获取到音频轨道，请在分享对话框中勾选"分享音频"');
+      }
+
+      const stream = new MediaStream(audioTracks);
+
+      // 3. 创建 AudioContext（16kHz）并连接处理节点
+      const audioCtx = new AudioContext({ sampleRate: 16000 });
+      const source = audioCtx.createMediaStreamSource(stream);
+      const processor = audioCtx.createScriptProcessor(2048, 1, 1);
+
+      // 4. 连接到静音增益节点，避免双重播放
+      const silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0;
+      processor.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
+      source.connect(processor);
+
+      // 5. 创建 WebSocket 连接
+      const ws = await connectTencentASR(
+        (finalText, interimText) => {
+          renderTranscript(overlay, finalText, interimText);
+        },
+        (errMsg) => {
+          const textEl = overlay.querySelector('.transcript-text');
+          if (textEl) {
+            const errEl = document.createElement('span');
+            errEl.className = 'transcript-error';
+            errEl.textContent = '⚠️ ' + errMsg;
+            textEl.appendChild(errEl);
+          }
+        }
+      );
+
+      // 6. 音频处理：发送 PCM 数据给 WebSocket
+      processor.onaudioprocess = (e) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          const float32 = e.inputBuffer.getChannelData(0);
+          const pcm = float32ToPCM16(float32);
+          ws.send(pcm);
+        }
+      };
+
+      // 7. 保存状态
+      transcriptionMap.set(boardId, { ws, audioCtx, stream, processor, finalText: '' });
+
+      // 8. 更新 UI
+      btnMic.classList.add('active');
+      overlay.style.display = 'flex';
+      // 更新覆盖层位置
+      adjustIframeScaleForItem(item, boardId);
+
+    } catch (err) {
+      console.error('[千川看板] 转写启动失败:', err);
+      const overlay2 = item.querySelector('.transcript-overlay');
+      if (overlay2) {
+        overlay2.style.display = 'flex';
+        const textEl = overlay2.querySelector('.transcript-text');
+        if (textEl) {
+          const errEl = document.createElement('span');
+          errEl.className = 'transcript-error';
+          errEl.textContent = '⚠️ 启动失败: ' + err.message;
+          textEl.appendChild(errEl);
+        }
+      }
+    }
+  }
+
+  /**
+   * 停止转写
+   * @param {number} boardId - 看板 ID
+   */
+  function stopTranscription(boardId) {
+    const state = transcriptionMap.get(boardId);
+    if (!state) return;
+
+    const { ws, audioCtx, stream, processor } = state;
+
+    // 关闭 WebSocket
+    if (ws && ws.readyState !== WebSocket.CLOSED) {
+      try { ws.close(); } catch (e) { /* ignore */ }
+    }
+
+    // 断开 processor
+    if (processor) {
+      processor.onaudioprocess = null;
+      try { processor.disconnect(); } catch (e) { /* ignore */ }
+    }
+
+    // 关闭 AudioContext
+    if (audioCtx && audioCtx.state !== 'closed') {
+      audioCtx.close().catch(() => {});
+    }
+
+    // 停止媒体轨道
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+
+    transcriptionMap.delete(boardId);
+
+    // 更新 UI
+    const item = document.querySelector(`.grid-item[data-id="${boardId}"]`);
+    if (item) {
+      const btnMic = item.querySelector('.btn-mic');
+      if (btnMic) btnMic.classList.remove('active');
+      // overlay 保留（历史文字不清空）
+    }
+  }
+
+  /**
+   * 渲染转写文字到覆盖层
+   * @param {HTMLElement} overlay
+   * @param {string} finalText - 所有已确认文字
+   * @param {string} interimText - 当前中间结果
+   */
+  function renderTranscript(overlay, finalText, interimText) {
+    const textEl = overlay.querySelector('.transcript-text');
+    if (!textEl) return;
+
+    textEl.innerHTML = '';
+
+    if (finalText) {
+      const finalEl = document.createElement('span');
+      finalEl.className = 'final';
+      finalEl.textContent = finalText;
+      textEl.appendChild(finalEl);
+    }
+
+    if (interimText) {
+      const interimEl = document.createElement('span');
+      interimEl.className = 'interim';
+      interimEl.textContent = interimText;
+      textEl.appendChild(interimEl);
+    }
+
+    // 自动滚底
+    overlay.scrollTop = overlay.scrollHeight;
+  }
+
+  /**
+   * 连接腾讯云实时语音识别 WebSocket
+   * @param {Function} onResult - (finalText, interimText) => void
+   * @param {Function} onError - (errMsg) => void
+   * @returns {Promise<WebSocket>}
+   */
+  async function connectTencentASR(onResult, onError) {
+    // 从 storage 读取用户填写的凭证
+    const stored = await new Promise(resolve =>
+      chrome.storage.local.get('asrCredentials', ({ asrCredentials }) => resolve(asrCredentials))
+    );
+    if (!stored || !stored.appId || !stored.secretId || !stored.secretKey) {
+      throw new Error('请先点击顶部"⚙️ ASR 设置"填写腾讯云凭证');
+    }
+    const base = typeof TENCENT_ASR_CONFIG !== 'undefined' ? TENCENT_ASR_CONFIG : {};
+    const cfg = { ...base, ...stored };
+
+    const params = {
+      secretid: cfg.secretId,
+      timestamp: Math.floor(Date.now() / 1000),
+      expired: Math.floor(Date.now() / 1000) + 86400,
+      nonce: Math.floor(Math.random() * 100000),
+      engine_model_type: cfg.engineModelType,
+      voice_id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+      voice_format: 1,        // PCM
+      needvad: 1,
+      vad_silence_time: 600,
+      word_info: 0
+    };
+
+    // 按 key 字典序排列构造签名原文
+    const sortedKeys = Object.keys(params).sort();
+    const queryStr = sortedKeys.map(k => `${k}=${params[k]}`).join('&');
+    const signSrc = `asr.cloud.tencent.com/asr/v2/${cfg.appId}?${queryStr}`;
+
+    // HMAC-SHA1 签名
+    const keyBytes = new TextEncoder().encode(cfg.secretKey);
+    const msgBytes = new TextEncoder().encode(signSrc);
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']
+    );
+    const signBuffer = await crypto.subtle.sign('HMAC', cryptoKey, msgBytes);
+    const signBase64 = btoa(String.fromCharCode(...new Uint8Array(signBuffer)));
+
+    const url = `wss://asr.cloud.tencent.com/asr/v2/${cfg.appId}?${queryStr}&signature=${encodeURIComponent(signBase64)}`;
+
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url);
+      let finalText = '';
+      let resolved = false;
+
+      ws.onopen = () => {
+        console.log('[千川看板] ASR WebSocket 已连接');
+        resolved = true;
+        resolve(ws);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.code !== 0) {
+            onError(`识别错误: ${data.message || data.code}`);
+            return;
+          }
+          const result = data.result;
+          if (!result) return;
+
+          const sliceType = result.slice_type;
+          const text = result.voice_text_str || '';
+
+          if (sliceType === 2) {
+            // 最终结果
+            finalText += text;
+            onResult(finalText, '');
+          } else {
+            // 中间结果（0=句首,1=中间）
+            onResult(finalText, text);
+          }
+        } catch (e) {
+          console.warn('[千川看板] ASR 消息解析失败:', e);
+        }
+      };
+
+      ws.onerror = (e) => {
+        console.error('[千川看板] ASR WebSocket 错误:', e);
+        onError('WebSocket 连接错误');
+        if (!resolved) reject(new Error('WebSocket 连接失败'));
+      };
+
+      ws.onclose = (e) => {
+        console.log('[千川看板] ASR WebSocket 关闭:', e.code, e.reason);
+        if (!resolved) reject(new Error('WebSocket 关闭: ' + e.code));
+      };
+    });
+  }
+
+  /**
+   * Float32 音频数据转 16bit PCM
+   * @param {Float32Array} float32Array
+   * @returns {ArrayBuffer}
+   */
+  function float32ToPCM16(float32Array) {
+    const buffer = new ArrayBuffer(float32Array.length * 2);
+    const view = new DataView(buffer);
+    for (let i = 0; i < float32Array.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32Array[i]));
+      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+    return buffer;
+  }
+
+  /**
+   * 下载指定看板的转写文本
+   * @param {number} boardId
+   * @param {string} boardTitle
+   */
+  function downloadTranscript(boardId, boardTitle) {
+    const item = document.querySelector(`.grid-item[data-id="${boardId}"]`);
+    if (!item) return;
+    const textEl = item.querySelector('.transcript-text');
+    if (!textEl) return;
+
+    // 提取纯文本（final + interim）
+    const text = textEl.innerText || textEl.textContent || '';
+    if (!text.trim()) {
+      alert('暂无转写内容');
+      return;
+    }
+
+    const filename = `转写_${boardTitle}_${new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[/:]/g, '-')}.txt`;
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   /**

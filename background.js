@@ -63,6 +63,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleAutoCollectBoards(data, sendResponse);
       return true; // 异步响应
 
+    case 'captureTabAudio':
+      // 捕获当前标签页音频流 ID
+      chrome.tabCapture.getMediaStreamId(
+        { consumerTabId: sender.tab.id },
+        (streamId) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          } else {
+            sendResponse({ success: true, streamId });
+          }
+        }
+      );
+      return true; // 异步响应
+
     default:
       sendResponse({ success: false, error: '未知 action: ' + action });
       return false;
@@ -223,31 +237,59 @@ function handleSaveBoards(data, sendResponse) {
 // ============================================
 
 /**
- * 等待指定 Tab 加载完成
- * 必须在 chrome.tabs.create 之前调用，以避免监听器注册竞态
- * @param {number} tabId
- * @param {number} [timeoutMs=15000]
- * @returns {Promise<boolean>} true=加载完成, false=超时
+ * 等待新 Tab 被创建，返回 tab 对象；超时则返回 null
+ * 注意：必须在触发点击之前调用，以避免监听器注册竞态
+ * @param {number} [timeoutMs=8000]
+ * @returns {Promise<chrome.tabs.Tab|null>}
  */
-function waitForTabComplete(tabId, timeoutMs = 15000) {
+function waitForNewTab(timeoutMs = 8000) {
   return new Promise((resolve) => {
     let timer;
-
-    function listener(updatedTabId, changeInfo) {
-      if (updatedTabId === tabId && changeInfo.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(listener);
-        clearTimeout(timer);
-        resolve(true);
-      }
+    function listener(tab) {
+      chrome.tabs.onCreated.removeListener(listener);
+      clearTimeout(timer);
+      resolve(tab);
     }
-
-    chrome.tabs.onUpdated.addListener(listener);
-
+    chrome.tabs.onCreated.addListener(listener);
     timer = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      resolve(false);
+      chrome.tabs.onCreated.removeListener(listener);
+      resolve(null);
     }, timeoutMs);
   });
+}
+
+/**
+ * 等待指定 Tab 的 URL 匹配正则且 status=complete
+ * @param {number} tabId
+ * @param {RegExp} regex
+ * @param {number} [timeoutMs=15000]
+ * @returns {Promise<chrome.tabs.Tab|null>} 匹配到的 tab 对象，超时返回 null
+ */
+function waitForTabUrlMatch(tabId, regex, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let timer;
+    function listener(updatedTabId, changeInfo, tab) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete' && regex.test(tab.url)) {
+        chrome.tabs.onUpdated.removeListener(listener);
+        clearTimeout(timer);
+        resolve(tab);
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+    timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve(null);
+    }, timeoutMs);
+  });
+}
+
+/**
+ * 安全关闭 Tab（忽略已关闭/不存在的情况）
+ * @param {number|null} tabId
+ */
+async function safeClose(tabId) {
+  if (tabId == null) return;
+  try { await chrome.tabs.remove(tabId); } catch (e) { /* 已关闭或不存在 */ }
 }
 
 /**
@@ -277,7 +319,23 @@ function sendMessageToTab(tabId, message, timeoutMs = 10000) {
 }
 
 /**
- * 自动采集所有直播大屏
+ * 向 collectProgress.logs 追加一条日志并写入 storage
+ * @param {string[]} logs - 当前日志数组（in-place 追加）
+ * @param {string} text
+ * @param {'info'|'success'|'skip'|'error'} type
+ */
+async function logCollect(logs, text, type = 'info') {
+  console.log(`[千川看板] ${text}`);
+  logs.push({ text, type, ts: Date.now() });
+  const { collectProgress } = await chrome.storage.local.get('collectProgress');
+  await chrome.storage.local.set({
+    collectProgress: { ...collectProgress, logs: logs.slice(-200) }
+  });
+}
+
+/**
+ * 自动采集所有直播大屏（模拟人工操作流程）
+ * 流程：ECP账号列表(A) → 点击账号 → 计划列表页(B) → 点击投放中计划 → 计划详情页(C) → 点击直播大屏 → 大屏页(D) → 保存URL
  * @param {Object} data - { tabId: number } ECP 页面的 Tab ID
  * @param {Function} sendResponse
  */
@@ -290,149 +348,189 @@ async function handleAutoCollectBoards(data, sendResponse) {
 
   sendResponse({ success: true, message: '采集已启动' });
 
-  // 1. 扫描 ECP 页面获取所有 aavid
-  const scanResult = await sendMessageToTab(ecpTabId, { action: 'scanAccounts' });
-  const aavids = scanResult && scanResult.aavids;
-
-  if (!aavids || aavids.length === 0) {
-    await chrome.storage.local.set({
-      collectProgress: { status: 'error', error: '未找到千川账号，请确认当前页面为 ECP 多账号管理页' }
-    });
-    return;
-  }
-
-  // 2. 初始化进度
-  let found = 0;
+  let found = 0;        // 新增保存的大屏数
+  let foundDup = 0;    // 已存在的大屏数
   let skippedAccounts = 0;
+  let hasMore = true;
+  const logs = [];
+
   await chrome.storage.local.set({
-    collectProgress: {
-      status: 'running',
-      startedAt: Date.now(),
-      total: aavids.length,
-      current: 0,
-      found: 0,
-      skippedAccounts: 0
-    }
+    collectProgress: { status: 'running', startedAt: Date.now(), found: 0, foundDup: 0, skippedAccounts: 0, logs }
   });
 
-  // 3. 串行处理每个 aavid
-  for (let i = 0; i < aavids.length; i++) {
-    const aavid = aavids[i];
-    let listTabId = null;
+  try {
+    while (hasMore) {
+      const countResult = await sendMessageToTab(ecpTabId, { action: 'getAccountCount' });
+      const N = (countResult && countResult.count) || 0;
 
-    try {
-      // 打开计划列表页（在注册监听器之后）
-      const listUrl = `https://qianchuan.jinritemai.com/uni-prom?aavid=${aavid}`;
-      const waitPromise = new Promise((resolve) => {
-        let timer;
-        function listener(updatedTabId, changeInfo) {
-          if (changeInfo.status === 'complete') {
-            // tabId 在 create 回调后才知道，通过闭包共享
-            if (listTabId !== null && updatedTabId === listTabId) {
-              chrome.tabs.onUpdated.removeListener(listener);
-              clearTimeout(timer);
-              resolve(true);
-            }
-          }
+      if (N === 0) {
+        await logCollect(logs, '❌ ECP 页面未找到账号，请确认已打开账号列表页', 'error');
+        break;
+      }
+
+      await logCollect(logs, `📋 共检测到 ${N} 个账号，逐个检查直到无投放中计划为止`);
+
+      for (let i = 0; i < N; i++) {
+        // 暂停检测：等待用户点击"继续采集"
+        while (true) {
+          const { collectPaused } = await chrome.storage.local.get('collectPaused');
+          if (!collectPaused) break;
+          await new Promise(r => setTimeout(r, 500));
         }
-        chrome.tabs.onUpdated.addListener(listener);
-        timer = setTimeout(() => {
-          chrome.tabs.onUpdated.removeListener(listener);
-          resolve(false);
-        }, 15000);
-      });
 
-      const listTab = await chrome.tabs.create({ url: listUrl, active: false });
-      listTabId = listTab.id;
+        let qcTabId = null;
+        let boardTabId = null;
 
-      const loaded = await waitPromise;
-      if (!loaded) {
-        skippedAccounts++;
-        continue;
-      }
-
-      // 等待 SPA 渲染
-      await new Promise(r => setTimeout(r, 2000));
-
-      // 扫描投放中的计划
-      const campaignResult = await sendMessageToTab(listTabId, { action: 'scanLiveCampaigns' });
-      const adIds = campaignResult && campaignResult.adIds;
-
-      if (!adIds || adIds.length === 0) {
-        skippedAccounts++;
-        continue;
-      }
-
-      // 4. 串行处理每个 adId
-      for (const adId of adIds) {
-        let detailTabId = null;
         try {
-          const detailUrl = `https://qianchuan.jinritemai.com/uni-prom/detail?aavid=${aavid}&adId=${adId}&ct=1&dr=${new Date().toISOString().slice(0,10)},${new Date().toISOString().slice(0,10)}`;
+          await logCollect(logs, `─── 第 ${i + 1}/${N} 个账号 ───`);
 
-          const detailWaitPromise = new Promise((resolve) => {
-            let timer;
-            function listener(updatedTabId, changeInfo) {
-              if (changeInfo.status === 'complete') {
-                if (detailTabId !== null && updatedTabId === detailTabId) {
-                  chrome.tabs.onUpdated.removeListener(listener);
-                  clearTimeout(timer);
-                  resolve(true);
-                }
-              }
+          // A→B：尝试获取 URL 静默打开；否则监听新标签
+          const newTabPromise = waitForNewTab(8000);
+          const accountResult = await sendMessageToTab(ecpTabId, { action: 'clickAccount', index: i });
+
+          let qcTab;
+          if (accountResult && accountResult.url) {
+            // 静默打开，不切换到该标签
+            qcTab = await chrome.tabs.create({ url: accountResult.url, active: false });
+          } else {
+            qcTab = await newTabPromise;
+            if (!qcTab) {
+              await logCollect(logs, '⏭️ 点击账号后未打开新标签，跳过', 'skip');
+              skippedAccounts++;
+              continue;
             }
-            chrome.tabs.onUpdated.addListener(listener);
-            timer = setTimeout(() => {
-              chrome.tabs.onUpdated.removeListener(listener);
-              resolve(false);
-            }, 15000);
-          });
-
-          const detailTab = await chrome.tabs.create({ url: detailUrl, active: false });
-          detailTabId = detailTab.id;
-
-          const detailLoaded = await detailWaitPromise;
-          if (!detailLoaded) continue;
-
-          await new Promise(r => setTimeout(r, 2000));
-
-          const boardResult = await sendMessageToTab(detailTabId, { action: 'extractBoardUrl' });
-          if (boardResult && boardResult.url) {
-            const saveResult = await saveBoardInternal(boardResult.url, boardResult.title || '直播大屏');
-            if (saveResult.success) found++;
           }
+          qcTabId = qcTab.id;
+          await logCollect(logs, '✓ 已打开千川计划列表页', 'success');
+
+          // 等待页面B加载
+          const qcLoaded = await waitForTabUrlMatch(qcTabId, /uni-prom/, 15000);
+          if (!qcLoaded) {
+            await logCollect(logs, '⏭️ 计划列表页加载超时，跳过', 'skip');
+            skippedAccounts++;
+            continue;
+          }
+
+          // 步骤1：轮询等待"直播大屏"徽标出现（最多等 15s）
+          let checkResult = null;
+          for (let retry = 0; retry < 6; retry++) {
+            await new Promise(r => setTimeout(r, retry === 0 ? 3000 : 2000));
+            checkResult = await sendMessageToTab(qcTabId, { action: 'checkLiveCampaign' });
+            if (checkResult && checkResult.badgeCount > 0) break;
+            if (retry > 0) await logCollect(logs, `  ↩ 等待页面渲染(${retry})... badge=${checkResult?.badgeCount ?? '?'}`);
+          }
+
+          if (!checkResult || checkResult.badgeCount === 0) {
+            if (checkResult && checkResult.statusCount === 0) {
+              // 该账号无任何"投放中"计划，说明已到无投放账号区域，停止检查
+              await logCollect(logs, `🛑 账号 ${i + 1} 无投放中计划，停止检查`, 'skip');
+              hasMore = false;
+              break;
+            }
+            const textsStr = checkResult?.statusTexts?.join(',') || '无';
+            await logCollect(logs, `⏭️ 有计划但无直播大屏（status=${checkResult?.statusCount} anyBadge=${checkResult?.anyBadgeCount ?? '?'} 状态词:[${textsStr}]），跳过`, 'skip');
+            skippedAccounts++;
+            continue;
+          }
+
+          await logCollect(logs, `✓ 找到"直播大屏"徽标，尝试获取链接`);
+
+          // 步骤2：先注册监听，再触发点击（防竞态）
+          const boardTabPromise = waitForNewTab(10000);
+          const clickResult = await sendMessageToTab(qcTabId, { action: 'clickLiveCampaign' });
+
+          let boardUrl = null;
+
+          if (clickResult && clickResult.url) {
+            // content 直接返回了 URL（没有调用 click），直接打开
+            await logCollect(logs, `✓ 获取到直播大屏链接，直接打开`);
+            const newTab = await chrome.tabs.create({ url: clickResult.url, active: false });
+            boardTabId = newTab.id;
+            boardUrl = clickResult.url;
+          } else {
+            // content 调用了 badge.click()，等待新标签
+            const boardTab = await boardTabPromise;
+            if (!boardTab) {
+              await logCollect(logs, '⏭️ 点击后未打开新标签，跳过', 'skip');
+              skippedAccounts++;
+              continue;
+            }
+            boardTabId = boardTab.id;
+            // 立即推到后台，避免页面闪烁
+            await chrome.tabs.update(boardTabId, { active: false }).catch(() => {});
+            // 等待 tab 加载完成（最多 12s）
+            const boardLoaded = await waitForTabUrlMatch(boardTabId, /.*/, 12000);
+            const tabInfo = boardLoaded ? boardLoaded : await chrome.tabs.get(boardTabId).catch(() => null);
+            const tabUrl = tabInfo && tabInfo.url;
+            await logCollect(logs, `ℹ️ 新标签 URL: ${(tabUrl || '未知').substring(0, 80)}`);
+            if (!tabUrl || !tabUrl.includes('board-next')) {
+              await logCollect(logs, '⏭️ 新标签不是直播大屏页面，跳过', 'skip');
+              skippedAccounts++;
+              continue;
+            }
+            boardUrl = tabUrl;
+          }
+          if (boardUrl && boardUrl.includes('board-next')) {
+            const saveResult = await saveBoardInternal(boardUrl, '直播大屏');
+            if (saveResult.success) {
+              found++;
+              await logCollect(logs, `✅ 新增保存！已采集 ${found} 个大屏`, 'success');
+            } else if (saveResult.error && saveResult.error.includes('已存在')) {
+              foundDup++;
+              await logCollect(logs, `ℹ️ 已存在，跳过（共发现 ${found + foundDup} 个）`, 'skip');
+            } else {
+              await logCollect(logs, `⚠️ ${saveResult.error}`, 'skip');
+            }
+          }
+
+        } catch (e) {
+          await logCollect(logs, `❌ 出错：${e.message}`, 'error');
+          skippedAccounts++;
         } finally {
-          if (detailTabId !== null) {
-            try { await chrome.tabs.remove(detailTabId); } catch (e) { /* 已关闭 */ }
-          }
+          await safeClose(boardTabId);
+          await safeClose(qcTabId);
         }
       }
 
-    } catch (e) {
-      console.error('[千川看板] 处理账号出错:', aavid, e);
-      skippedAccounts++;
-    } finally {
-      if (listTabId !== null) {
-        try { await chrome.tabs.remove(listTabId); } catch (e) { /* 已关闭 */ }
-      }
+      hasMore = false;
     }
-
-    // 更新进度
-    await chrome.storage.local.set({
-      collectProgress: {
-        status: 'running',
-        startedAt: Date.now(),
-        total: aavids.length,
-        current: i + 1,
-        found,
-        skippedAccounts
-      }
-    });
+  } catch (e) {
+    await logCollect(logs, `❌ 采集中断：${e.message}`, 'error');
   }
 
-  // 5. 全部完成
+  // 全部完成
   await chrome.storage.local.set({
-    collectProgress: { status: 'done', total: aavids.length, found, skippedAccounts }
+    collectProgress: { status: 'done', found, foundDup, skippedAccounts, logs }
   });
 
   chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+}
+
+/**
+ * 将采集日志写入本地文件 ~/Downloads/qianchuan-log.txt
+ * @param {Array} logs
+ */
+function saveLogsToFile(logs) {
+  const lines = logs.map(l => {
+    const ts = new Date(l.ts).toLocaleTimeString('zh-CN', { hour12: false });
+    return `[${ts}] ${l.text}`;
+  });
+  lines.push('');
+  lines.push(`写入时间: ${new Date().toLocaleString('zh-CN')}`);
+
+  const content = lines.join('\n');
+  const dataUrl = 'data:text/plain;charset=utf-8,' + encodeURIComponent(content);
+
+  chrome.downloads.download({
+    url: dataUrl,
+    filename: 'qianchuan-log.txt',
+    conflictAction: 'overwrite',
+    saveAs: false
+  }, (downloadId) => {
+    if (chrome.runtime.lastError) {
+      console.error('[千川看板] 日志保存失败:', chrome.runtime.lastError.message);
+    } else {
+      console.log('[千川看板] 日志已保存，downloadId:', downloadId);
+    }
+  });
 }

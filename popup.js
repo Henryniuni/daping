@@ -15,10 +15,10 @@
   // DOM 元素引用
   // ============================================
 
-  const btnCapture = document.getElementById('btn-capture');
-  const btnAuto = document.getElementById('btn-auto');
   const btnOpen = document.getElementById('btn-open');
   const btnAutoCollect = document.getElementById('btn-auto-collect');
+  const btnPause = document.getElementById('btn-pause');
+  const btnCopyLog = document.getElementById('btn-copy-log');
   const collectProgressEl = document.getElementById('collect-progress');
   const boardCountEl = document.getElementById('board-count');
 
@@ -30,15 +30,15 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     console.log('[千川看板 Popup] 页面加载完成');
-    
-    // 获取已保存的看板数量
-    loadBoardCount();
 
-    // 检测当前页面，决定是否显示自动采集按钮
-    detectPageAndShowCollectBtn();
-
-    // 绑定按钮事件
+    // 绑定按钮事件（必须最先执行，不受后续异步操作影响）
     bindEvents();
+
+    // 获取已保存的看板数量
+    try { loadBoardCount(); } catch (e) { /* 非扩展环境忽略 */ }
+
+    // 恢复上次采集进度状态
+    detectPageAndShowCollectBtn().catch(() => {});
   });
 
   // ============================================
@@ -81,114 +81,15 @@
   // ============================================
 
   function bindEvents() {
-    // 捕获当前大屏
-    btnCapture.addEventListener('click', handleCapture);
-
-    // 自动寻找并捕获
-    btnAuto.addEventListener('click', handleAutoNavigate);
-
-    // 打开聚合看板
     btnOpen.addEventListener('click', handleOpenDashboard);
-
-    // 自动采集所有直播大屏（仅 ECP 页面显示）
     btnAutoCollect.addEventListener('click', handleAutoCollect);
+    btnPause.addEventListener('click', handlePauseResume);
+    btnCopyLog.addEventListener('click', handleCopyLog);
   }
 
   // ============================================
   // 按钮处理函数
   // ============================================
-
-  /**
-   * 处理捕获按钮点击
-   * 向当前标签页的 content script 发送提取指令
-   */
-  async function handleCapture() {
-    console.log('[千川看板 Popup] 点击捕获按钮');
-
-    try {
-      // 获取当前活动标签页
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-      if (!tab) {
-        alert('❌ 无法获取当前标签页');
-        return;
-      }
-
-      // 检查是否是千川页面
-      const qianchuanUrls = ['qianchuan.jinritemai.com', 'buyin.jinritemai.com'];
-      const isQianchuanPage = qianchuanUrls.some(url => tab.url && tab.url.includes(url));
-
-      if (!isQianchuanPage) {
-        alert('⚠️ 当前不是千川页面，请先打开千川网站');
-        return;
-      }
-
-      // 向 content script 发送提取指令
-      chrome.tabs.sendMessage(
-        tab.id,
-        { action: 'extractCurrentBoard' },
-        (response) => {
-          // 处理错误
-          if (chrome.runtime.lastError) {
-            console.error('[千川看板 Popup] 发送消息失败:', chrome.runtime.lastError);
-            alert('❌ 无法访问页面，请刷新页面重试');
-            return;
-          }
-
-          // 处理响应
-          if (!response) {
-            alert('❌ 页面无响应，请刷新重试');
-            return;
-          }
-
-          switch (response.status) {
-            case 'saved':
-              alert('✅ 已保存当前大屏到看板');
-              // 刷新数量显示
-              loadBoardCount();
-              break;
-
-            case 'not_board_page':
-              alert('⚠️ 当前不是大屏页面，请先进入直播间大屏');
-              break;
-
-            default:
-              alert('❌ 未知状态，请刷新重试');
-          }
-        }
-      );
-
-    } catch (error) {
-      console.error('[千川看板 Popup] 捕获失败:', error);
-      alert('❌ 操作失败，请刷新页面重试');
-    }
-  }
-
-  /**
-   * 处理自动导航按钮点击
-   * 触发 background 的自动导航功能
-   */
-  function handleAutoNavigate() {
-    console.log('[千川看板 Popup] 点击自动导航按钮');
-
-    chrome.runtime.sendMessage(
-      { action: 'autoNavigate' },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          console.error('[千川看板 Popup] 自动导航失败:', chrome.runtime.lastError);
-          alert('❌ 自动导航启动失败，请刷新页面重试');
-          return;
-        }
-
-        if (response && response.success) {
-          alert('🤖 已开始自动导航，请稍候...');
-        } else {
-          const errorMsg = response?.error || '自动导航失败';
-          alert('❌ ' + errorMsg);
-        }
-      }
-    );
-  }
 
   /**
    * 处理打开看板按钮点击
@@ -209,30 +110,40 @@
   // ============================================
 
   /**
-   * 检测当前页面，若为 ECP 页面则显示自动采集按钮
-   * 同时恢复上次采集进度状态
+   * 恢复上次采集进度状态
    */
   async function detectPageAndShowCollectBtn() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.url && tab.url.includes('business.oceanengine.com')) {
-      btnAutoCollect.style.display = '';
-    }
-
-    // 恢复上次进度状态（若仍在运行则自动恢复轮询）
     const { collectProgress } = await chrome.storage.local.get('collectProgress');
     if (collectProgress) {
       renderProgress(collectProgress);
       if (collectProgress.status === 'running') {
-        // 检查是否过期（5分钟）
         if (Date.now() - (collectProgress.startedAt || 0) > 5 * 60 * 1000) {
           await chrome.storage.local.set({ collectProgress: { status: 'idle' } });
           renderProgress(null);
         } else {
-          // 恢复轮询
           btnAutoCollect.disabled = true;
+          btnPause.style.display = '';
           startProgressPolling();
         }
       }
+    }
+  }
+
+  /**
+   * 暂停 / 继续采集
+   */
+  async function handlePauseResume() {
+    const { collectPaused } = await chrome.storage.local.get('collectPaused');
+    if (collectPaused) {
+      // 当前暂停 → 继续
+      await chrome.storage.local.set({ collectPaused: false });
+      btnPause.textContent = '⏸ 暂停采集';
+      btnPause.classList.remove('resuming');
+    } else {
+      // 当前运行 → 暂停
+      await chrome.storage.local.set({ collectPaused: true });
+      btnPause.textContent = '▶ 继续采集';
+      btnPause.classList.add('resuming');
     }
   }
 
@@ -242,23 +153,35 @@
   async function handleAutoCollect() {
     console.log('[千川看板 Popup] 点击自动采集按钮');
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) return;
-
-    btnAutoCollect.disabled = true;
-
-    chrome.runtime.sendMessage(
-      { action: 'autoCollectBoards', data: { tabId: tab.id } },
-      (response) => {
-        if (chrome.runtime.lastError || !response || !response.success) {
-          const err = (response && response.error) || '启动失败，请刷新页面重试';
-          showProgress('❌ ' + err, 'error');
-          btnAutoCollect.disabled = false;
-          return;
-        }
-        startProgressPolling();
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) {
+        showProgress('❌ 无法获取当前标签页，请重试', 'error');
+        return;
       }
-    );
+
+      btnAutoCollect.disabled = true;
+      await chrome.storage.local.set({ collectPaused: false });
+
+      chrome.runtime.sendMessage(
+        { action: 'autoCollectBoards', data: { tabId: tab.id } },
+        (response) => {
+          if (chrome.runtime.lastError || !response || !response.success) {
+            const err = (response && response.error) || '启动失败，请刷新页面重试';
+            showProgress('❌ ' + err, 'error');
+            btnAutoCollect.disabled = false;
+            return;
+          }
+          btnPause.style.display = '';
+          btnPause.textContent = '⏸ 暂停采集';
+          btnPause.classList.remove('resuming');
+          startProgressPolling();
+        }
+      );
+    } catch (e) {
+      showProgress('❌ ' + (e.message || '启动失败'), 'error');
+      btnAutoCollect.disabled = false;
+    }
   }
 
   /**
@@ -293,48 +216,78 @@
       clearInterval(collectPollInterval);
       collectPollInterval = null;
       btnAutoCollect.disabled = false;
+      btnPause.style.display = 'none';
+      await chrome.storage.local.set({ collectPaused: false });
       loadBoardCount();
     }
   }
 
   /**
-   * 根据进度对象渲染进度区域
+   * 根据进度对象渲染日志面板
    * @param {Object|null} progress
    */
+  async function handleCopyLog() {
+    const { collectProgress } = await chrome.storage.local.get('collectProgress');
+    const logs = (collectProgress && collectProgress.logs) || [];
+    const text = logs.map(l => l.text).join('\n');
+    await navigator.clipboard.writeText(text || '（无日志）');
+    btnCopyLog.textContent = '✅ 已复制';
+    setTimeout(() => { btnCopyLog.textContent = '📋 复制日志'; }, 2000);
+  }
+
   function renderProgress(progress) {
     if (!progress || progress.status === 'idle') {
       collectProgressEl.style.display = 'none';
+      btnCopyLog.style.display = 'none';
       return;
     }
 
     collectProgressEl.style.display = '';
+    btnCopyLog.style.display = '';
+    collectProgressEl.className = 'collect-progress' +
+      (progress.status === 'done' ? ' done' : progress.status === 'error' ? ' error' : '');
 
-    switch (progress.status) {
-      case 'running':
-        showProgress(
-          `⏳ 正在检查 ${progress.current}/${progress.total} 个账号，已找到 ${progress.found} 个大屏...`,
-          'running'
-        );
-        break;
-      case 'done':
-        showProgress(
-          `✅ 完成！找到 ${progress.found} 个直播大屏（跳过 ${progress.skippedAccounts} 个账号）`,
-          'done'
-        );
-        break;
-      case 'error':
-        showProgress('❌ ' + (progress.error || '采集失败'), 'error');
-        break;
+    const logs = progress.logs || [];
+
+    // 尾部状态行
+    let statusLine = '';
+    if (progress.status === 'done') {
+      const total = (progress.found || 0) + (progress.foundDup || 0);
+      const newPart = progress.found ? `新增 ${progress.found} 个` : '';
+      const dupPart = progress.foundDup ? `已存在 ${progress.foundDup} 个` : '';
+      const detail = [newPart, dupPart].filter(Boolean).join('，') || '未发现大屏';
+      statusLine = `✅ 完成！共发现 ${total} 个大屏（${detail}）`;
+    } else if (progress.status === 'running') {
+      const total = (progress.found || 0) + (progress.foundDup || 0);
+      statusLine = `⏳ 采集中，已发现 ${total} 个大屏...`;
+    }
+
+    // 渲染日志行（只在内容变化时重绘，避免滚动跳动）
+    const newHtml = logs.map(({ text, type }) => {
+      const cls = type === 'success' ? 'log-success' : type === 'skip' ? 'log-skip' : type === 'error' ? 'log-error' : 'log-info';
+      return `<div class="${cls}">${escapeHtml(text)}</div>`;
+    }).join('') + (statusLine ? `<div class="log-status">${escapeHtml(statusLine)}</div>` : '');
+
+    if (collectProgressEl.innerHTML !== newHtml) {
+      collectProgressEl.innerHTML = newHtml;
+      // 自动滚到最新日志
+      collectProgressEl.scrollTop = collectProgressEl.scrollHeight;
     }
   }
 
+  function escapeHtml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
   /**
-   * 显示进度文字
+   * 显示单行提示（用于错误/警告等非日志场景）
    * @param {string} text
+   * @param {string} [type]
    */
-  function showProgress(text) {
+  function showProgress(text, type) {
     collectProgressEl.style.display = '';
-    collectProgressEl.textContent = text;
+    collectProgressEl.innerHTML = `<div class="log-${type || 'info'}">${escapeHtml(text)}</div>`;
+    collectProgressEl.className = 'collect-progress' + (type && type !== 'running' ? ' ' + type : '');
   }
 
 })();

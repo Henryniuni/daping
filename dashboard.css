@@ -376,6 +376,187 @@ body {
 }
 
 /* ============================================
+   ASR 设置弹窗
+   ============================================ */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-box {
+  background: #1a1a2e;
+  border: 1px solid #3a3a6a;
+  border-radius: 12px;
+  width: 380px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #2a2a4a;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  color: #8b92b9;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.modal-close:hover { color: #ff0050; }
+
+.modal-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.modal-body label {
+  font-size: 12px;
+  color: #8b92b9;
+  margin-top: 4px;
+}
+
+.modal-body input {
+  background: #0f0f1e;
+  border: 1px solid #3a3a6a;
+  color: #fff;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+}
+
+.modal-body input:focus {
+  border-color: #ff0050;
+  box-shadow: 0 0 0 2px rgba(255,0,80,0.2);
+}
+
+.modal-tip {
+  font-size: 11px;
+  color: #5c6380;
+  margin-top: 8px;
+  line-height: 1.6;
+}
+
+.modal-link {
+  color: #ff4d8f;
+  text-decoration: none;
+}
+
+.modal-link:hover {
+  text-decoration: underline;
+}
+
+.modal-footer {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid #2a2a4a;
+  justify-content: flex-end;
+}
+
+/* ============================================
+   语音转写覆盖层
+   ============================================ */
+
+.transcript-overlay {
+  position: absolute;
+  top: 0;
+  background: rgba(0, 0, 0, 0.85);
+  color: #e2e8f0;
+  font-size: 13px;
+  line-height: 1.7;
+  padding: 12px;
+  overflow-y: auto;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+
+.transcript-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.transcript-btn {
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #e2e8f0;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.transcript-btn:hover {
+  background: rgba(255,255,255,0.2);
+}
+
+.transcript-text {
+  flex: 1;
+  word-break: break-all;
+  overflow-y: auto;
+}
+
+.transcript-text .final {
+  color: #e2e8f0;
+  display: block;
+}
+
+.transcript-text .interim {
+  color: #718096;
+  display: block;
+}
+
+.transcript-error {
+  color: #fc8181;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.btn-mic {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+.btn-mic.active {
+  filter: drop-shadow(0 0 4px #fc8181);
+}
+
+/* 非1×1布局隐藏麦克风按钮 */
+.layout-2 .btn-mic,
+.layout-3 .btn-mic,
+.layout-4 .btn-mic {
+  display: none;
+}
+
+/* ============================================
    滚动条样式
    ============================================ */
 

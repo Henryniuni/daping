@@ -17,22 +17,20 @@
   <main class="content">
     <!-- 按钮区 -->
     <div class="button-group">
-      <button id="btn-capture" class="btn btn-primary">
-        📍 捕获当前大屏
-      </button>
-      <button id="btn-auto" class="btn btn-secondary">
-        🤖 自动寻找并捕获
-      </button>
       <button id="btn-open" class="btn btn-secondary">
         📊 打开聚合看板
       </button>
-      <button id="btn-auto-collect" class="btn btn-collect" style="display:none;">
+      <button id="btn-auto-collect" class="btn btn-collect">
         🚀 自动采集所有直播大屏
+      </button>
+      <button id="btn-pause" class="btn btn-pause" style="display:none;">
+        ⏸ 暂停采集
       </button>
     </div>
 
     <!-- 采集进度区（默认隐藏） -->
     <div id="collect-progress" class="collect-progress" style="display:none;"></div>
+    <button id="btn-copy-log" class="btn btn-copy-log" style="display:none;">📋 复制日志</button>
 
     <!-- 统计区 -->
     <div class="stats-box">

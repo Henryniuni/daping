@@ -9,7 +9,8 @@
     "scripting",
     "declarativeNetRequest",
     "declarativeNetRequestWithHostAccess",
-    "tabs"
+    "tabs",
+    "tabCapture"
   ],
   "host_permissions": [
     "https://qianchuan.jinritemai.com/*",
@@ -45,7 +46,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["dashboard.html", "dashboard.js", "dashboard.css"],
+      "resources": ["dashboard.html", "dashboard.js", "dashboard.css", "config.js"],
       "matches": ["<all_urls>"]
     }
   ]
