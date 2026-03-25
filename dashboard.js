@@ -1070,7 +1070,7 @@
 
       // 自动滚底（rAF 等 DOM 重排完成后再滚）
       requestAnimationFrame(() => {
-        overlay.scrollTop = overlay.scrollHeight;
+        textEl.scrollTop = textEl.scrollHeight;
       });
     });
   }
