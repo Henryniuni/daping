@@ -3,5 +3,5 @@
  * 凭证通过页面设置弹窗填写，存储在 chrome.storage.local 中
  */
 const TENCENT_ASR_CONFIG = {
-  engineModelType: '16k_zh_large'
+  engineModelType: '16k_zh'
 };
