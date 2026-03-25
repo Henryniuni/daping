@@ -378,9 +378,21 @@
       toggleTranscription(item, board.id);
     });
 
+    // 下载转写按钮（仅 1×1 布局可见，样式同 btn-mic）
+    const btnDownloadHeader = document.createElement('button');
+    btnDownloadHeader.className = 'btn-mic btn-download-transcript';
+    btnDownloadHeader.title = '下载转写文本';
+    btnDownloadHeader.textContent = '⬇️';
+    btnDownloadHeader.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      downloadTranscript(board.id, board.title, btnDownloadHeader);
+    });
+
     actions.appendChild(btnRefresh);
     actions.appendChild(btnOpen);
     actions.appendChild(btnMic);
+    actions.appendChild(btnDownloadHeader);
     actions.appendChild(btnRemove);
     
     header.appendChild(titleArea);
@@ -408,17 +420,6 @@
     const transcriptOverlay = document.createElement('div');
     transcriptOverlay.className = 'transcript-overlay';
     transcriptOverlay.style.display = 'none';
-
-    // 顶部工具栏
-    const transcriptToolbar = document.createElement('div');
-    transcriptToolbar.className = 'transcript-toolbar';
-    const btnDownload = document.createElement('button');
-    btnDownload.className = 'transcript-btn';
-    btnDownload.title = '下载转写文本';
-    btnDownload.textContent = '⬇ 下载';
-    btnDownload.addEventListener('click', () => downloadTranscript(board.id, board.title));
-    transcriptToolbar.appendChild(btnDownload);
-    transcriptOverlay.appendChild(transcriptToolbar);
 
     const transcriptText = document.createElement('div');
     transcriptText.className = 'transcript-text';
@@ -1194,21 +1195,127 @@
    * @param {number} boardId
    * @param {string} boardTitle
    */
-  function downloadTranscript(boardId, boardTitle) {
+  /**
+   * 点击下载按钮：弹出格式选择菜单
+   */
+  function downloadTranscript(boardId, boardTitle, anchorEl) {
     const item = document.querySelector(`.grid-item[data-id="${boardId}"]`);
     if (!item) return;
     const textEl = item.querySelector('.transcript-text');
     if (!textEl) return;
 
-    // 提取纯文本（final + interim）
-    const text = textEl.innerText || textEl.textContent || '';
-    if (!text.trim()) {
-      alert('暂无转写内容');
+    const text = (textEl.innerText || textEl.textContent || '').trim();
+    if (!text) { alert('暂无转写内容'); return; }
+
+    // 移除已有菜单
+    document.querySelectorAll('.download-menu').forEach(m => m.remove());
+
+    const menu = document.createElement('div');
+    menu.className = 'download-menu';
+
+    const formats = [
+      { label: '📄 TXT 纯文本',   ext: 'txt'  },
+      { label: '📝 Markdown',     ext: 'md'   },
+      { label: '📊 CSV',          ext: 'csv'  },
+      { label: '📗 Excel (xlsx)', ext: 'xlsx' },
+      { label: '📘 Word (doc)',   ext: 'doc'  },
+      { label: '📕 PDF',          ext: 'pdf'  },
+    ];
+
+    formats.forEach(({ label, ext }) => {
+      const btn = document.createElement('button');
+      btn.className = 'download-menu-item';
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        menu.remove();
+        doDownload(text, boardTitle, ext);
+      });
+      menu.appendChild(btn);
+    });
+
+    // 定位到按钮下方
+    const rect = anchorEl.getBoundingClientRect();
+    menu.style.top = (rect.bottom + 4) + 'px';
+    menu.style.right = (window.innerWidth - rect.right) + 'px';
+    document.body.appendChild(menu);
+
+    // 点击其他地方关闭
+    const close = (e) => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', close, true); } };
+    setTimeout(() => document.addEventListener('click', close, true), 0);
+  }
+
+  /**
+   * 执行实际下载
+   */
+  function doDownload(text, boardTitle, ext) {
+    const ts = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[/:]/g, '-');
+    const baseName = `转写_${boardTitle}_${ts}`;
+    const lines = text.split('\n').filter(l => l.trim());
+
+    let blob;
+    let filename;
+
+    if (ext === 'txt') {
+      blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      filename = baseName + '.txt';
+
+    } else if (ext === 'md') {
+      const md = `# 转写记录 - ${boardTitle}\n\n> 导出时间：${new Date().toLocaleString('zh-CN')}\n\n---\n\n${lines.map(l => l + '\n').join('\n')}`;
+      blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+      filename = baseName + '.md';
+
+    } else if (ext === 'csv') {
+      const csv = lines.map((l, i) => `${i + 1},"${l.replace(/"/g, '""')}"`).join('\r\n');
+      blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }); // BOM 保证 Excel 正常显示中文
+      filename = baseName + '.csv';
+
+    } else if (ext === 'doc') {
+      const docHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset='utf-8'><title>转写记录</title>
+<style>body{font-family:SimSun,serif;font-size:12pt;line-height:2;}p{margin:0 0 6pt;}</style></head>
+<body>
+<h2>转写记录 - ${escapeHtml(boardTitle)}</h2>
+<p style="color:#888">导出时间：${new Date().toLocaleString('zh-CN')}</p>
+<hr>
+${lines.map(l => `<p>${escapeHtml(l)}</p>`).join('\n')}
+</body></html>`;
+      blob = new Blob(['\uFEFF' + docHtml], { type: 'application/msword;charset=utf-8' });
+      filename = baseName + '.doc';
+
+    } else if (ext === 'xlsx') {
+      const wsData = [['序号', '转写内容'], ...lines.map((l, i) => [i + 1, l])];
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      ws['!cols'] = [{ wch: 6 }, { wch: 80 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, '转写记录');
+      XLSX.writeFile(wb, baseName + '.xlsx');
+      return;
+
+    } else if (ext === 'pdf') {
+      const printHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>转写记录</title>
+<style>
+  body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;font-size:13px;line-height:1.8;padding:30px;color:#222;}
+  h2{margin-bottom:4px;}
+  .meta{color:#888;font-size:11px;margin-bottom:16px;}
+  p{margin:0 0 6px;}
+</style></head><body>
+<h2>转写记录 - ${escapeHtml(boardTitle)}</h2>
+<div class="meta">导出时间：${new Date().toLocaleString('zh-CN')}</div>
+${lines.map(l => `<p>${escapeHtml(l)}</p>`).join('\n')}
+</body></html>`;
+      const printFrame = document.createElement('iframe');
+      printFrame.style.cssText = 'position:fixed;width:0;height:0;border:none;opacity:0;';
+      printFrame.srcdoc = printHtml;
+      printFrame.onload = () => {
+        printFrame.contentWindow.focus();
+        printFrame.contentWindow.print();
+        setTimeout(() => document.body.removeChild(printFrame), 2000);
+      };
+      document.body.appendChild(printFrame);
       return;
     }
 
-    const filename = `转写_${boardTitle}_${new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[/:]/g, '-')}.txt`;
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
