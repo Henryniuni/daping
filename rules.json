@@ -5,18 +5,32 @@
     "action": {
       "type": "modifyHeaders",
       "responseHeaders": [
-        {
-          "header": "X-Frame-Options",
-          "operation": "remove"
-        },
-        {
-          "header": "Content-Security-Policy",
-          "operation": "remove"
-        }
+        { "header": "X-Frame-Options", "operation": "remove" },
+        { "header": "Content-Security-Policy", "operation": "remove" }
       ]
     },
     "condition": {
       "urlFilter": "||qianchuan.jinritemai.com",
+      "resourceTypes": ["main_frame", "sub_frame"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        { "header": "X-Frame-Options", "operation": "remove" },
+        { "header": "Content-Security-Policy", "operation": "remove" }
+      ],
+      "requestHeaders": [
+        { "header": "Sec-Fetch-Dest", "operation": "set", "value": "document" },
+        { "header": "Sec-Fetch-Mode", "operation": "set", "value": "navigate" },
+        { "header": "Sec-Fetch-Site", "operation": "set", "value": "none" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||douyin.com",
       "resourceTypes": ["main_frame", "sub_frame"]
     }
   }

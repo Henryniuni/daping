@@ -77,6 +77,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
       return true; // 异步响应
 
+    case 'openTab':
+      // 打开新标签页并返回 tabId（active 默认 false，后台静默打开）
+      chrome.tabs.create({ url: data.url, active: false }, (tab) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+        } else {
+          sendResponse({ success: true, tabId: tab.id });
+        }
+      });
+      return true;
+
+    case 'getDashboardTabId':
+      // 返回发送者的 tabId（即 dashboard 自身）
+      sendResponse({ success: true, tabId: sender.tab.id });
+      return false;
+
+    case 'moveTabToMiniWindow':
+      // 把指定 tab 移到独立最小化小窗，避免占用主窗口标签栏
+      chrome.windows.create({
+        tabId: data.tabId,
+        type: 'popup',
+        width: 400,
+        height: 300,
+        state: 'minimized'
+      }, (win) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+        } else {
+          sendResponse({ success: true, windowId: win.id });
+        }
+      });
+      return true;
+
+    case 'captureDouyinTab':
+      // 捕获指定 tab 的音视频流，供 dashboard 消费
+      chrome.tabCapture.getMediaStreamId(
+        { targetTabId: data.targetTabId, consumerTabId: data.consumerTabId },
+        (streamId) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          } else {
+            sendResponse({ success: true, streamId });
+          }
+        }
+      );
+      return true;
+
     default:
       sendResponse({ success: false, error: '未知 action: ' + action });
       return false;

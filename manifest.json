@@ -15,7 +15,9 @@
   "host_permissions": [
     "https://qianchuan.jinritemai.com/*",
     "https://buyin.jinritemai.com/*",
-    "https://business.oceanengine.com/*"
+    "https://business.oceanengine.com/*",
+    "https://live.douyin.com/*",
+    "https://*.douyin.com/*"
   ],
   "declarative_net_request": {
     "rule_resources": [
@@ -42,6 +44,16 @@
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://live.douyin.com/*",
+        "https://*.douyin.com/*"
+      ],
+      "js": ["anticapture.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
     }
   ],
   "web_accessible_resources": [

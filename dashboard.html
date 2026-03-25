@@ -30,7 +30,13 @@
     </div>
   </header>
 
-  <!-- 主体容器 -->
+  <!-- Tab 栏 -->
+  <div class="tab-bar">
+    <button class="tab-btn active" id="tab-btn-boards">📊 聚合看板</button>
+    <button class="tab-btn" id="tab-btn-live">📺 直播间监控</button>
+  </div>
+
+  <!-- 主体容器（Tab 1：聚合看板） -->
   <main id="container" class="container layout-1">
     <!-- 空状态（默认显示） -->
     <div id="empty-state" class="empty-state">
@@ -39,6 +45,37 @@
       <div class="empty-tip">请在千川页面点击插件图标，选择"捕获当前大屏"</div>
     </div>
   </main>
+
+  <!-- Tab 2：直播间监控 -->
+  <div id="live-room-view" style="display:none">
+    <div class="live-room-layout">
+      <!-- 左侧：URL 输入 + iframe -->
+      <div class="live-room-left">
+        <div class="live-url-bar">
+          <input id="live-url-input" type="text" placeholder="输入抖音直播间地址，例：https://live.douyin.com/xxxxx">
+          <button id="btn-load-live" class="btn">↗ 载入</button>
+        </div>
+        <div class="live-iframe-wrapper">
+          <video id="live-video" autoplay playsinline></video>
+          <div id="live-tab-status" class="live-tab-status">输入直播间地址，点击「↗ 载入」打开</div>
+        </div>
+      </div>
+      <!-- 右侧：转写面板 -->
+      <div class="live-room-right">
+        <div class="live-transcript-panel">
+          <div class="transcript-header">
+            <span class="transcript-header-title">🎙 实时转写</span>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span class="transcript-speed live-speed"><span>语速：— 字/分钟</span></span>
+              <button class="btn-mic" id="live-btn-mic" title="开始/停止转写">🎤</button>
+              <button class="btn-mic btn-download-transcript" id="live-btn-download" title="下载转写文本">⬇️</button>
+            </div>
+          </div>
+          <div class="transcript-text" id="live-transcript-text"></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- 底部栏 -->
   <footer class="footer">

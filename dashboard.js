@@ -34,6 +34,10 @@
   // 转写状态 Map：boardId → { ws, audioCtx, stream, finalText }
   const transcriptionMap = new Map();
 
+  // 直播间监控：已打开的抖音 tab ID 和其所在小窗 ID
+  let liveDouyinTabId = null;
+  let liveDouyinWindowId = null;
+
   // ============================================
   // DOM 元素引用
   // ============================================
@@ -218,6 +222,59 @@
         updateFwCount();
         fwModal.style.display = 'none';
       });
+    });
+
+    // Tab 切换
+    const tabBoards = document.getElementById('tab-btn-boards');
+    const tabLive = document.getElementById('tab-btn-live');
+    const containerEl = document.getElementById('container');
+    const liveView = document.getElementById('live-room-view');
+
+    tabBoards.addEventListener('click', () => {
+      tabBoards.classList.add('active');
+      tabLive.classList.remove('active');
+      containerEl.style.display = '';
+      liveView.style.display = 'none';
+    });
+
+    tabLive.addEventListener('click', () => {
+      tabLive.classList.add('active');
+      tabBoards.classList.remove('active');
+      containerEl.style.display = 'none';
+      liveView.style.display = 'flex';
+    });
+
+    // 直播间：后台静默打开，用户留在 dashboard
+    document.getElementById('btn-load-live').addEventListener('click', async () => {
+      const url = document.getElementById('live-url-input').value.trim();
+      if (!url) return;
+
+      liveClearLog();
+      liveLog('正在后台加载直播间…', 'info');
+      const resp = await new Promise(r =>
+        chrome.runtime.sendMessage({ action: 'openTab', data: { url, active: false } }, r)
+      );
+      if (resp && resp.success) {
+        liveClearLog();
+        liveLog('直播间已在后台加载，待加载完毕后点击 🎤 开始转写', 'ok');
+      } else {
+        liveLog('打开失败：' + (resp && resp.error), 'error');
+      }
+    });
+
+    document.getElementById('live-url-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('btn-load-live').click();
+    });
+
+    // 直播间：麦克风按钮
+    document.getElementById('live-btn-mic').addEventListener('click', () => {
+      toggleLiveTranscription();
+    });
+
+    // 直播间：下载按钮
+    document.getElementById('live-btn-download').addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadLiveTranscript(e.currentTarget);
     });
   }
 
@@ -906,7 +963,7 @@
       const displayStream = await navigator.mediaDevices.getDisplayMedia({
         video: true,   // Chrome 要求必须请求 video
         audio: {
-          suppressLocalAudioPlayback: false,
+          suppressLocalAudioPlayback: true,
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false
@@ -1020,11 +1077,20 @@
     transcriptionMap.delete(boardId);
 
     // 更新 UI
-    const item = document.querySelector(`.grid-item[data-id="${boardId}"]`);
-    if (item) {
-      const btnMic = item.querySelector('.btn-mic');
-      if (btnMic) btnMic.classList.remove('active');
-      // overlay 保留（历史文字不清空）
+    if (boardId === LIVE_ID) {
+      const btn = document.getElementById('live-btn-mic');
+      if (btn) btn.classList.remove('active');
+      const video = document.getElementById('live-video');
+      if (video) { video.srcObject = null; }
+      liveDouyinTabId = null;
+      liveClearLog();
+      liveLog('已停止转写，可重新点击 🎤 继续', 'info');
+    } else {
+      const item = document.querySelector(`.grid-item[data-id="${boardId}"]`);
+      if (item) {
+        const btnMic = item.querySelector('.btn-mic');
+        if (btnMic) btnMic.classList.remove('active');
+      }
     }
   }
 
@@ -1298,13 +1364,15 @@
   /**
    * 点击下载按钮：弹出格式选择菜单
    */
-  function downloadTranscript(boardId, boardTitle, anchorEl) {
-    const item = document.querySelector(`.grid-item[data-id="${boardId}"]`);
-    if (!item) return;
-    const textEl = item.querySelector('.transcript-text');
-    if (!textEl) return;
-
-    const text = (textEl.innerText || textEl.textContent || '').trim();
+  function downloadTranscript(boardId, boardTitle, anchorEl, preloadedText) {
+    let text = preloadedText || '';
+    if (!text && boardId) {
+      const item = document.querySelector(`.grid-item[data-id="${boardId}"]`);
+      if (!item) return;
+      const textEl = item.querySelector('.transcript-text');
+      if (!textEl) return;
+      text = (textEl.innerText || textEl.textContent || '').trim();
+    }
     if (!text) { alert('暂无转写内容'); return; }
 
     // 移除已有菜单
@@ -1422,6 +1490,162 @@ ${lines.map(l => `<p>${escapeHtml(l)}</p>`).join('\n')}
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  // ============================================
+  // 直播间监控 Tab 转写
+  // ============================================
+
+  const LIVE_ID = '__live__';
+
+  function toggleLiveTranscription() {
+    if (transcriptionMap.has(LIVE_ID)) {
+      stopTranscription(LIVE_ID);
+    } else {
+      startLiveTranscription();
+    }
+  }
+
+  // 向 live-tab-status 追加一行日志
+  function liveLog(msg, type = 'info') {
+    const statusEl = document.getElementById('live-tab-status');
+    if (!statusEl) return;
+    statusEl.style.display = 'flex';
+    const line = document.createElement('div');
+    line.className = 'live-log-line live-log-' + type;
+    const icon = { info: '⏳', ok: '✅', error: '❌', warn: '⚠️' }[type] || '•';
+    line.textContent = icon + ' ' + msg;
+    statusEl.appendChild(line);
+    statusEl.scrollTop = statusEl.scrollHeight;
+  }
+
+  function liveClearLog() {
+    const statusEl = document.getElementById('live-tab-status');
+    if (statusEl) { statusEl.innerHTML = ''; statusEl.style.display = 'none'; }
+  }
+
+  async function startLiveTranscription() {
+    const btnMic = document.getElementById('live-btn-mic');
+    const textEl = document.getElementById('live-transcript-text');
+    const speedEl = document.querySelector('.live-speed');
+    const video = document.getElementById('live-video');
+
+    liveClearLog();
+
+    try {
+      // 1. 弹出 getDisplayMedia 选择对话框
+      liveLog('即将弹出屏幕共享对话框…', 'info');
+      liveLog('请选择「标签页」→ 点击抖音直播间 → 勾选「分享音频」→ 点击共享', 'warn');
+
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: {
+          suppressLocalAudioPlayback: true,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+
+      liveLog('获取到媒体流，正在处理…', 'info');
+
+      // 视频轨道用于显示画面
+      const videoTracks = displayStream.getVideoTracks();
+      const audioTracks = displayStream.getAudioTracks();
+
+      if (audioTracks.length === 0) {
+        displayStream.getTracks().forEach(t => t.stop());
+        throw new Error('NO_AUDIO');
+      }
+
+      liveLog(`视频轨 ${videoTracks.length} 条，音频轨 ${audioTracks.length} 条`, 'ok');
+
+      // 2. 将视频流显示在左侧面板（有声）
+      video.srcObject = displayStream;
+      video.muted = false;
+      liveClearLog();
+
+      // 跳回 dashboard 标签页
+      chrome.tabs.getCurrent((tab) => {
+        if (tab) {
+          chrome.tabs.update(tab.id, { active: true });
+          chrome.windows.update(tab.windowId, { focused: true });
+        }
+      });
+
+      // 直播间标签页留在后台即可（suppressLocalAudioPlayback 已静音，无需移窗）
+
+      // 3. 音频轨道用于 ASR
+      const audioStream = new MediaStream(audioTracks);
+
+      const audioCtx = new AudioContext({ sampleRate: 16000 });
+      const source = audioCtx.createMediaStreamSource(audioStream);
+      const processor = audioCtx.createScriptProcessor(2048, 1, 1);
+      const silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0;
+      processor.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
+      source.connect(processor);
+
+      // 构造模拟 overlay，让 renderTranscript 操作 live tab 的 DOM
+      const fakeOverlay = {
+        querySelector: (sel) => {
+          if (sel === '.transcript-text') return textEl;
+          if (sel === '.transcript-speed') return speedEl;
+          return null;
+        }
+      };
+
+      liveLog('正在连接腾讯云 ASR…', 'info');
+      const ws = await connectTencentASR(
+        (finalSegments, interimText) => {
+          renderTranscript(fakeOverlay, finalSegments, interimText, LIVE_ID);
+        },
+        (errMsg) => {
+          liveLog('ASR 错误: ' + errMsg, 'error');
+          const errEl = document.createElement('span');
+          errEl.className = 'transcript-error';
+          errEl.textContent = '⚠️ ' + errMsg;
+          textEl.appendChild(errEl);
+        }
+      );
+      // 连接成功后清除日志，不遮挡画面
+      liveClearLog();
+      // 在转写面板显示等待提示（收到第一条文字后会被替换）
+      textEl.innerHTML = '<span class="interim" style="color:#4a90d9">✓ ASR 已连接，等待识别结果…</span>';
+
+      processor.onaudioprocess = (e) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(float32ToPCM16(e.inputBuffer.getChannelData(0)));
+        }
+      };
+
+      transcriptionMap.set(LIVE_ID, { ws, audioCtx, stream: displayStream, processor, finalSegments: [], startTime: Date.now() });
+      btnMic.classList.add('active');
+
+    } catch (err) {
+      // 用户主动取消对话框
+      if (err.name === 'NotAllowedError' || err.message === 'Permission denied by user' || err.message.includes('Permission denied')) {
+        liveClearLog();
+        liveLog('已取消，点击 🎤 重新开始', 'info');
+        return;
+      }
+      // 未勾选音频
+      if (err.message === 'NO_AUDIO') {
+        liveClearLog();
+        liveLog('未检测到音频，请重试并勾选「分享标签页中的音频」', 'warn');
+        return;
+      }
+      console.error('[千川看板] 直播间转写启动失败:', err);
+      liveLog('启动失败: ' + err.message, 'error');
+    }
+  }
+
+  function downloadLiveTranscript(anchorEl) {
+    const textEl = document.getElementById('live-transcript-text');
+    const text = (textEl.innerText || textEl.textContent || '').trim();
+    if (!text) { alert('暂无转写内容'); return; }
+    downloadTranscript(null, '直播间监控', anchorEl, text);
   }
 
   /**
