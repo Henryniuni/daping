@@ -575,6 +575,30 @@ body {
 }
 
 
+.transcript-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: linear-gradient(90deg, #ff0050 0%, #ff4d8f 100%);
+  border-radius: 4px 4px 0 0;
+  flex-shrink: 0;
+  margin-bottom: 8px;
+}
+
+.transcript-header-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.5px;
+}
+
+.transcript-speed {
+  font-size: 11px;
+  color: rgba(255,255,255,0.9);
+  font-weight: 500;
+}
+
 .transcript-text {
   word-break: break-all;
 }

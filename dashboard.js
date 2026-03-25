@@ -421,6 +421,12 @@
     transcriptOverlay.className = 'transcript-overlay';
     transcriptOverlay.style.display = 'none';
 
+    // 顶部状态栏
+    const transcriptHeader = document.createElement('div');
+    transcriptHeader.className = 'transcript-header';
+    transcriptHeader.innerHTML = `<span class="transcript-header-title">🎙 实时转写</span><span class="transcript-speed">语速：— 字/分钟</span>`;
+    transcriptOverlay.appendChild(transcriptHeader);
+
     const transcriptText = document.createElement('div');
     transcriptText.className = 'transcript-text';
     transcriptOverlay.appendChild(transcriptText);
@@ -933,7 +939,7 @@
       // 5. 创建 WebSocket 连接
       const ws = await connectTencentASR(
         (finalText, interimText) => {
-          renderTranscript(overlay, finalText, interimText);
+          renderTranscript(overlay, finalText, interimText, boardId);
         },
         (errMsg) => {
           const textEl = overlay.querySelector('.transcript-text');
@@ -956,7 +962,7 @@
       };
 
       // 7. 保存状态
-      transcriptionMap.set(boardId, { ws, audioCtx, stream, processor, finalText: '' });
+      transcriptionMap.set(boardId, { ws, audioCtx, stream, processor, finalText: '', startTime: Date.now() });
 
       // 8. 更新 UI
       btnMic.classList.add('active');
@@ -1028,9 +1034,21 @@
    * @param {string} finalText - 所有已确认文字
    * @param {string} interimText - 当前中间结果
    */
-  function renderTranscript(overlay, finalText, interimText) {
+  function renderTranscript(overlay, finalText, interimText, boardId) {
     const textEl = overlay.querySelector('.transcript-text');
     if (!textEl) return;
+
+    // 更新语速
+    const speedEl = overlay.querySelector('.transcript-speed');
+    if (speedEl && boardId) {
+      const state = transcriptionMap.get(boardId);
+      if (state && state.startTime) {
+        const elapsedMin = (Date.now() - state.startTime) / 60000;
+        const charCount = finalText.replace(/\s/g, '').length;
+        const speed = elapsedMin > 0.1 ? Math.round(charCount / elapsedMin) : 0;
+        speedEl.textContent = `语速：${speed} 字/分钟`;
+      }
+    }
 
     chrome.storage.local.get('forbiddenWords', ({ forbiddenWords }) => {
       const words = forbiddenWords || [];
