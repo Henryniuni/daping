@@ -938,8 +938,8 @@
 
       // 5. 创建 WebSocket 连接
       const ws = await connectTencentASR(
-        (finalText, interimText) => {
-          renderTranscript(overlay, finalText, interimText, boardId);
+        (finalSegments, interimText) => {
+          renderTranscript(overlay, finalSegments, interimText, boardId);
         },
         (errMsg) => {
           const textEl = overlay.querySelector('.transcript-text');
@@ -962,7 +962,7 @@
       };
 
       // 7. 保存状态
-      transcriptionMap.set(boardId, { ws, audioCtx, stream, processor, finalText: '', startTime: Date.now() });
+      transcriptionMap.set(boardId, { ws, audioCtx, stream, processor, finalSegments: [], startTime: Date.now() });
 
       // 8. 更新 UI
       btnMic.classList.add('active');
@@ -1034,7 +1034,10 @@
    * @param {string} finalText - 所有已确认文字
    * @param {string} interimText - 当前中间结果
    */
-  function renderTranscript(overlay, finalText, interimText, boardId) {
+  // 说话人颜色池
+  const SPEAKER_COLORS = ['#e2e8f0', '#63b3ed', '#68d391', '#f6ad55', '#b794f4', '#fc8181'];
+
+  function renderTranscript(overlay, finalSegments, interimText, boardId) {
     const textEl = overlay.querySelector('.transcript-text');
     if (!textEl) return;
 
@@ -1043,10 +1046,36 @@
     if (speedEl && boardId) {
       const state = transcriptionMap.get(boardId);
       if (state && state.startTime) {
-        const elapsedMin = (Date.now() - state.startTime) / 60000;
-        const charCount = finalText.replace(/\s/g, '').length;
-        const speed = elapsedMin > 0.1 ? Math.round(charCount / elapsedMin) : 0;
-        speedEl.textContent = `语速：${speed} 字/分钟`;
+        const elapsedMin = Math.max((Date.now() - state.startTime) / 60000, 0.1);
+
+        // 按说话人统计字数
+        const speakerMap = new Map();
+        finalSegments.forEach(seg => {
+          const key = seg.speakerId;
+          const cnt = (speakerMap.get(key) || 0) + seg.text.replace(/\s/g, '').length;
+          speakerMap.set(key, cnt);
+        });
+
+        const totalChars = [...speakerMap.values()].reduce((a, b) => a + b, 0);
+        const totalSpeed = Math.round(totalChars / elapsedMin);
+        const speakerCount = [...speakerMap.keys()].filter(k => k >= 0).length;
+
+        if (speakerCount <= 1) {
+          // 单人或未知：显示总语速
+          speedEl.innerHTML = `<span>语速：${totalSpeed} 字/分钟</span>`;
+        } else {
+          // 多人：总语速 + 每人一行
+          const lines = [`<span class="speed-total">总语速：${totalSpeed} 字/分钟</span>`];
+          [...speakerMap.entries()]
+            .filter(([k]) => k >= 0)
+            .sort(([a], [b]) => a - b)
+            .forEach(([speakerId, chars]) => {
+              const spd = Math.round(chars / elapsedMin);
+              const color = SPEAKER_COLORS[speakerId % SPEAKER_COLORS.length];
+              lines.push(`<span class="speed-speaker" style="color:${color}">说话人${speakerId + 1}：${spd} 字/分钟</span>`);
+            });
+          speedEl.innerHTML = lines.join('');
+        }
       }
     }
 
@@ -1054,13 +1083,27 @@
       const words = forbiddenWords || [];
       textEl.innerHTML = '';
 
-      if (finalText) {
-        const finalEl = document.createElement('span');
-        finalEl.className = 'final';
-        finalEl.innerHTML = highlightForbiddenWords(finalText, words);
-        textEl.appendChild(finalEl);
-      }
+      // 渲染已确认的分段
+      finalSegments.forEach(seg => {
+        const block = document.createElement('div');
+        block.className = 'transcript-segment';
+        const color = seg.speakerId >= 0 ? (SPEAKER_COLORS[seg.speakerId % SPEAKER_COLORS.length]) : '#e2e8f0';
+        if (seg.speakerId >= 0) {
+          const label = document.createElement('span');
+          label.className = 'speaker-label';
+          label.textContent = `说话人${seg.speakerId + 1}`;
+          label.style.color = color;
+          block.appendChild(label);
+        }
+        const textNode = document.createElement('span');
+        textNode.className = 'final';
+        textNode.style.color = color;
+        textNode.innerHTML = highlightForbiddenWords(seg.text, words);
+        block.appendChild(textNode);
+        textEl.appendChild(block);
+      });
 
+      // 渲染中间结果
       if (interimText) {
         const interimEl = document.createElement('span');
         interimEl.className = 'interim';
@@ -1068,11 +1111,30 @@
         textEl.appendChild(interimEl);
       }
 
-      // 自动滚底（rAF 等 DOM 重排完成后再滚）
+      // 自动滚底
       requestAnimationFrame(() => {
         textEl.scrollTop = textEl.scrollHeight;
       });
     });
+  }
+
+  /**
+   * 将 word_list 按说话人分组为 [{speakerId, text}]
+   * @param {Array} wordList
+   * @returns {Array}
+   */
+  function groupWordsBySpeaker(wordList) {
+    const segments = [];
+    wordList.forEach(word => {
+      const speakerId = word.speaker_id ?? 0;
+      const last = segments[segments.length - 1];
+      if (last && last.speakerId === speakerId) {
+        last.text += word.word;
+      } else {
+        segments.push({ speakerId, text: word.word });
+      }
+    });
+    return segments;
   }
 
   /**
@@ -1145,7 +1207,7 @@
 
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
-      let finalText = '';
+      let finalSegments = []; // [{speakerId, text}]
       let resolved = false;
 
       ws.onopen = () => {
@@ -1165,15 +1227,35 @@
           if (!result) return;
 
           const sliceType = result.slice_type;
-          const text = result.voice_text_str || '';
+          const interimText = result.voice_text_str || '';
 
           if (sliceType === 2) {
-            // 最终结果
-            finalText += text;
-            onResult(finalText, '');
+            // 最终结果：解析 word_list 按说话人分组
+            const wordList = result.word_list || [];
+            if (wordList.length > 0) {
+              const newSegs = groupWordsBySpeaker(wordList);
+              // 合并到末尾：若与最后一段同一说话人则拼接
+              newSegs.forEach(seg => {
+                const last = finalSegments[finalSegments.length - 1];
+                if (last && last.speakerId === seg.speakerId) {
+                  last.text += seg.text;
+                } else {
+                  finalSegments.push({ ...seg });
+                }
+              });
+            } else {
+              // 无 word_list 时退化为纯文本（speakerId = -1 表示未知）
+              const last = finalSegments[finalSegments.length - 1];
+              if (last && last.speakerId === -1) {
+                last.text += interimText;
+              } else {
+                finalSegments.push({ speakerId: -1, text: interimText });
+              }
+            }
+            onResult(finalSegments, '');
           } else {
-            // 中间结果（0=句首,1=中间）
-            onResult(finalText, text);
+            // 中间结果
+            onResult(finalSegments, interimText);
           }
         } catch (e) {
           console.warn('[千川看板] ASR 消息解析失败:', e);
