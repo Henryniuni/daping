@@ -17,6 +17,7 @@
       <button id="btn-refresh-all" class="btn">🔄 全部刷新</button>
       <button id="btn-clear-all" class="btn btn-danger">🗑️ 清空全部</button>
       <button id="btn-asr-settings" class="btn">⚙️ ASR 设置</button>
+      <button id="btn-forbidden-words" class="btn">🚫 违规词</button>
       <div class="layout-selector">
         <span>布局:</span>
         <select id="layout-select">
@@ -70,6 +71,31 @@
     </div>
   </div>
 
+  <!-- 违规词管理弹窗 -->
+  <div id="forbidden-words-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span>🚫 违规词管理</span>
+        <button id="btn-fw-close" class="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <label>违规词列表（每行一个词）</label>
+        <textarea id="fw-textarea" placeholder="例：&#10;违禁品&#10;绝对有效&#10;最低价" rows="8"></textarea>
+        <div class="fw-upload-row">
+          <label class="fw-upload-label" for="fw-file-input">📂 导入文件（.txt / .xlsx / .xls）</label>
+          <input id="fw-file-input" type="file" accept=".txt,.xlsx,.xls" style="display:none">
+          <span id="fw-count" class="fw-count">共 0 个词</span>
+        </div>
+        <div class="modal-tip">转写文字中出现违规词时将以红色高亮显示。</div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-fw-save" class="btn">保存</button>
+        <button id="btn-fw-clear" class="btn btn-danger">清空</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="xlsx.mini.min.js"></script>
   <script src="config.js"></script>
   <script src="dashboard.js"></script>
 </body>

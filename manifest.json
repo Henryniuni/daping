@@ -46,7 +46,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["dashboard.html", "dashboard.js", "dashboard.css", "config.js"],
+      "resources": ["dashboard.html", "dashboard.js", "dashboard.css", "config.js", "xlsx.mini.min.js"],
       "matches": ["<all_urls>"]
     }
   ]

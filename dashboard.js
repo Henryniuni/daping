@@ -122,6 +122,103 @@
         modal.style.display = 'none';
       });
     });
+
+    // 违规词弹窗
+    const fwModal = document.getElementById('forbidden-words-modal');
+    const fwTextarea = document.getElementById('fw-textarea');
+    const fwCount = document.getElementById('fw-count');
+
+    function updateFwCount() {
+      const words = parseFwTextarea();
+      fwCount.textContent = `共 ${words.length} 个词`;
+    }
+
+    function parseFwTextarea() {
+      return fwTextarea.value.split('\n').map(w => w.trim()).filter(w => w.length > 0);
+    }
+
+    document.getElementById('btn-forbidden-words').addEventListener('click', () => {
+      chrome.storage.local.get('forbiddenWords', ({ forbiddenWords }) => {
+        fwTextarea.value = (forbiddenWords || []).join('\n');
+        updateFwCount();
+        fwModal.style.display = 'flex';
+      });
+    });
+
+    document.getElementById('btn-fw-close').addEventListener('click', () => {
+      fwModal.style.display = 'none';
+    });
+
+    fwModal.addEventListener('click', (e) => {
+      if (e.target === fwModal) fwModal.style.display = 'none';
+    });
+
+    fwTextarea.addEventListener('input', updateFwCount);
+
+    // 从文件导入（.txt / .xlsx / .xls）
+    document.getElementById('fw-file-input').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const ext = file.name.split('.').pop().toLowerCase();
+
+      if (ext === 'txt') {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const lines = ev.target.result.split(/\r?\n/).map(w => w.trim()).filter(w => w.length > 0);
+          mergeIntoTextarea(lines);
+        };
+        reader.readAsText(file, 'utf-8');
+      } else if (ext === 'xlsx' || ext === 'xls') {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          try {
+            const workbook = XLSX.read(ev.target.result, { type: 'array' });
+            const words = [];
+            workbook.SheetNames.forEach(sheetName => {
+              const sheet = workbook.Sheets[sheetName];
+              const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+              rows.forEach(row => {
+                row.forEach(cell => {
+                  const val = String(cell ?? '').trim();
+                  if (val) words.push(val);
+                });
+              });
+            });
+            mergeIntoTextarea(words);
+          } catch (err) {
+            alert('Excel 解析失败：' + err.message);
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      }
+
+      e.target.value = '';
+    });
+
+    function mergeIntoTextarea(newWords) {
+      const existing = parseFwTextarea();
+      const merged = [...new Set([...existing, ...newWords])];
+      fwTextarea.value = merged.join('\n');
+      updateFwCount();
+    }
+
+    document.getElementById('btn-fw-save').addEventListener('click', () => {
+      const words = parseFwTextarea();
+      chrome.storage.local.set({ forbiddenWords: words }, () => {
+        fwModal.style.display = 'none';
+        console.log('[千川看板] 违规词已保存，共', words.length, '个');
+      });
+    });
+
+    document.getElementById('btn-fw-clear').addEventListener('click', () => {
+      if (!confirm('确定清空全部违规词？')) return;
+      chrome.storage.local.remove('forbiddenWords', () => {
+        fwTextarea.value = '';
+        updateFwCount();
+        fwModal.style.display = 'none';
+      });
+    });
   }
 
   /**
@@ -934,26 +1031,51 @@
     const textEl = overlay.querySelector('.transcript-text');
     if (!textEl) return;
 
-    textEl.innerHTML = '';
+    chrome.storage.local.get('forbiddenWords', ({ forbiddenWords }) => {
+      const words = forbiddenWords || [];
+      textEl.innerHTML = '';
 
-    if (finalText) {
-      const finalEl = document.createElement('span');
-      finalEl.className = 'final';
-      finalEl.textContent = finalText;
-      textEl.appendChild(finalEl);
-    }
+      if (finalText) {
+        const finalEl = document.createElement('span');
+        finalEl.className = 'final';
+        finalEl.innerHTML = highlightForbiddenWords(finalText, words);
+        textEl.appendChild(finalEl);
+      }
 
-    if (interimText) {
-      const interimEl = document.createElement('span');
-      interimEl.className = 'interim';
-      interimEl.textContent = interimText;
-      textEl.appendChild(interimEl);
-    }
+      if (interimText) {
+        const interimEl = document.createElement('span');
+        interimEl.className = 'interim';
+        interimEl.innerHTML = highlightForbiddenWords(interimText, words);
+        textEl.appendChild(interimEl);
+      }
 
-    // 自动滚底（rAF 等 DOM 重排完成后再滚）
-    requestAnimationFrame(() => {
-      overlay.scrollTop = overlay.scrollHeight;
+      // 自动滚底（rAF 等 DOM 重排完成后再滚）
+      requestAnimationFrame(() => {
+        overlay.scrollTop = overlay.scrollHeight;
+      });
     });
+  }
+
+  /**
+   * 将文本中的违规词包裹为红色高亮 HTML
+   * @param {string} text
+   * @param {string[]} words
+   * @returns {string} 安全的 HTML 字符串
+   */
+  function highlightForbiddenWords(text, words) {
+    if (!words || words.length === 0) return escapeHtml(text);
+
+    // 按长度降序排，避免短词先匹配覆盖长词
+    const sorted = [...words].sort((a, b) => b.length - a.length);
+    const escaped = sorted.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const regex = new RegExp(`(${escaped.join('|')})`, 'g');
+
+    return text.split(regex).map(part => {
+      if (words.includes(part)) {
+        return `<span class="highlight-word">${escapeHtml(part)}</span>`;
+      }
+      return escapeHtml(part);
+    }).join('');
   }
 
   /**
