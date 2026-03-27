@@ -1830,8 +1830,12 @@ ${lines.map(l => `<p>${escapeHtml(l)}</p>`).join('\n')}
   function buildTickerText(dataList) {
     const timeStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 
+    // 更新左侧时间戳标签
+    const timeEl = document.getElementById('gmv-broadcast-time');
+    if (timeEl) timeEl.textContent = timeStr;
+
     if (!dataList || dataList.length === 0) {
-      return `${timeStr} 播报 | 暂无数据（直播间可能未完全加载）`;
+      return '暂无数据（直播间可能未完全加载）';
     }
 
     const parts = dataList
@@ -1862,10 +1866,10 @@ ${lines.map(l => `<p>${escapeHtml(l)}</p>`).join('\n')}
       });
 
     if (parts.length === 0) {
-      return `${timeStr} 播报 | 数据读取中，请稍后重试`;
+      return '数据读取中，请稍后重试';
     }
 
-    return `${timeStr} 播报  ▍  ${parts.join('  <span class="gmv-sep">|</span>  ')}`;
+    return parts.join('  <span class="gmv-sep">|</span>  ');
   }
 
   /**
