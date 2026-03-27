@@ -8,6 +8,26 @@
  */
 
 // ============================================
+// 工具函数
+// ============================================
+
+/**
+ * #13: 等待采集恢复（用事件驱动替代 while(true) 轮询）
+ * 监听 storage.onChanged，collectPaused 变为 false 时 resolve
+ */
+function waitForResume() {
+  return new Promise(resolve => {
+    const listener = (changes) => {
+      if ('collectPaused' in changes && !changes.collectPaused.newValue) {
+        chrome.storage.onChanged.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+  });
+}
+
+// ============================================
 // 安装/更新初始化
 // ============================================
 
@@ -15,6 +35,7 @@ chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     // 首次安装时初始化存储
     chrome.storage.local.set({ boards: [] }, () => {
+      if (chrome.runtime.lastError) { console.error('[千川看板] 初始化存储失败:', chrome.runtime.lastError); return; }
       console.log('[千川看板] 初始化存储完成');
     });
   }
@@ -110,6 +131,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
 
+    case 'collectGmvData':
+      // 从 dashboard 的所有 board-next iframe 中收集 GMV 数据
+      handleCollectGmvData(sender.tab.id, sendResponse);
+      return true;
+
     case 'captureDouyinTab':
       // 捕获指定 tab 的音视频流，供 dashboard 消费
       chrome.tabCapture.getMediaStreamId(
@@ -165,6 +191,7 @@ function saveBoardInternal(url, title) {
 
       boards.push(newBoard);
       chrome.storage.local.set({ boards }, () => {
+        if (chrome.runtime.lastError) { resolve({ success: false, error: chrome.runtime.lastError.message }); return; }
         resolve({ success: true, count: boards.length, board: newBoard });
       });
     });
@@ -216,6 +243,7 @@ function handleDeleteBoard(data, sendResponse) {
     }
 
     chrome.storage.local.set({ boards }, () => {
+      if (chrome.runtime.lastError) { sendResponse({ success: false, error: chrome.runtime.lastError.message }); return; }
       sendResponse({ success: true, count: boards.length });
     });
   });
@@ -227,6 +255,7 @@ function handleDeleteBoard(data, sendResponse) {
  */
 function handleClearAll(sendResponse) {
   chrome.storage.local.set({ boards: [] }, () => {
+    if (chrome.runtime.lastError) { sendResponse({ success: false, error: chrome.runtime.lastError.message }); return; }
     sendResponse({ success: true, count: 0 });
   });
 }
@@ -255,9 +284,14 @@ async function handleAutoNavigate(sendResponse) {
       return;
     }
 
-    // 向内容脚本发送导航指令
-    await chrome.tabs.sendMessage(tab.id, { action: 'startNavigation' });
-    sendResponse({ success: true, message: '导航指令已发送' });
+    // #6 修复：等待 content script 确认收到指令再返回
+    const reply = await chrome.tabs.sendMessage(tab.id, { action: 'startNavigation' })
+      .catch(e => ({ success: false, error: e.message }));
+    if (reply && reply.success) {
+      sendResponse({ success: true, message: '导航指令已发送并确认' });
+    } else {
+      sendResponse({ success: false, error: (reply && reply.error) || 'content script 未响应，请确认页面已加载' });
+    }
   } catch (error) {
     sendResponse({ success: false, error: error.message });
   }
@@ -275,6 +309,7 @@ function handleSaveBoards(data, sendResponse) {
   }
 
   chrome.storage.local.set({ boards: data.boards }, () => {
+    if (chrome.runtime.lastError) { sendResponse({ success: false, error: chrome.runtime.lastError.message }); return; }
     sendResponse({ success: true, count: data.boards.length });
   });
 }
@@ -287,12 +322,15 @@ function handleSaveBoards(data, sendResponse) {
  * 等待新 Tab 被创建，返回 tab 对象；超时则返回 null
  * 注意：必须在触发点击之前调用，以避免监听器注册竞态
  * @param {number} [timeoutMs=8000]
+ * @param {number|null} [openerTabId=null] - #14: 仅接受由该 tab 打开的新 tab，过滤无关 tab
  * @returns {Promise<chrome.tabs.Tab|null>}
  */
-function waitForNewTab(timeoutMs = 8000) {
+function waitForNewTab(timeoutMs = 8000, openerTabId = null) {
   return new Promise((resolve) => {
     let timer;
     function listener(tab) {
+      // #14: 如果指定了 openerTabId，忽略非该 tab 打开的新 tab
+      if (openerTabId !== null && tab.openerTabId !== openerTabId) return;
       chrome.tabs.onCreated.removeListener(listener);
       clearTimeout(timer);
       resolve(tab);
@@ -418,12 +456,9 @@ async function handleAutoCollectBoards(data, sendResponse) {
       await logCollect(logs, `📋 共检测到 ${N} 个账号，逐个检查直到无投放中计划为止`);
 
       for (let i = 0; i < N; i++) {
-        // 暂停检测：等待用户点击"继续采集"
-        while (true) {
-          const { collectPaused } = await chrome.storage.local.get('collectPaused');
-          if (!collectPaused) break;
-          await new Promise(r => setTimeout(r, 500));
-        }
+        // #13: 暂停检测：用事件驱动等待"继续采集"，避免 while(true) 轮询
+        const { collectPaused } = await chrome.storage.local.get('collectPaused');
+        if (collectPaused) await waitForResume();
 
         let qcTabId = null;
         let boardTabId = null;
@@ -432,7 +467,7 @@ async function handleAutoCollectBoards(data, sendResponse) {
           await logCollect(logs, `─── 第 ${i + 1}/${N} 个账号 ───`);
 
           // A→B：尝试获取 URL 静默打开；否则监听新标签
-          const newTabPromise = waitForNewTab(8000);
+          const newTabPromise = waitForNewTab(8000, ecpTabId);
           const accountResult = await sendMessageToTab(ecpTabId, { action: 'clickAccount', index: i });
 
           let qcTab;
@@ -542,7 +577,12 @@ async function handleAutoCollectBoards(data, sendResponse) {
       hasMore = false;
     }
   } catch (e) {
+    // #5 修复：catch 时把 failed 状态写入 storage，调用方可通过轮询感知失败
     await logCollect(logs, `❌ 采集中断：${e.message}`, 'error');
+    await chrome.storage.local.set({
+      collectProgress: { status: 'failed', error: e.message, found, foundDup, skippedAccounts, logs }
+    });
+    return;
   }
 
   // 全部完成
@@ -553,31 +593,94 @@ async function handleAutoCollectBoards(data, sendResponse) {
   chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
 }
 
+
 /**
- * 将采集日志写入本地文件 ~/Downloads/qianchuan-log.txt
- * @param {Array} logs
+ * 收集 dashboard tab 中所有 board-next iframe 的 GMV 数据
+ * @param {number} dashboardTabId - dashboard 所在 tab ID
+ * @param {Function} sendResponse
  */
-function saveLogsToFile(logs) {
-  const lines = logs.map(l => {
-    const ts = new Date(l.ts).toLocaleTimeString('zh-CN', { hour12: false });
-    return `[${ts}] ${l.text}`;
-  });
-  lines.push('');
-  lines.push(`写入时间: ${new Date().toLocaleString('zh-CN')}`);
+function handleCollectGmvData(dashboardTabId, sendResponse) {
+  if (!dashboardTabId) {
+    sendResponse({ success: false, error: '无效的 tabId' });
+    return;
+  }
 
-  const content = lines.join('\n');
-  const dataUrl = 'data:text/plain;charset=utf-8,' + encodeURIComponent(content);
-
-  chrome.downloads.download({
-    url: dataUrl,
-    filename: 'qianchuan-log.txt',
-    conflictAction: 'overwrite',
-    saveAs: false
-  }, (downloadId) => {
-    if (chrome.runtime.lastError) {
-      console.error('[千川看板] 日志保存失败:', chrome.runtime.lastError.message);
-    } else {
-      console.log('[千川看板] 日志已保存，downloadId:', downloadId);
+  // 先用 getAllFrames 拿到 board-next frame 的 ID 列表
+  // 再用 executeScript 精确注入这些 frame，避免尝试注入 extension 页面导致整体报错
+  chrome.webNavigation.getAllFrames({ tabId: dashboardTabId }, (frames) => {
+    if (chrome.runtime.lastError || !frames) {
+      console.warn('[千川看板] getAllFrames 失败:', chrome.runtime.lastError);
+      sendResponse({ success: true, data: [] });
+      return;
     }
+
+    const boardFrames = frames.filter(f => f.url && f.url.includes('board-next'));
+    console.log('[千川看板] 找到 board-next frames:', boardFrames.length);
+
+    if (boardFrames.length === 0) {
+      sendResponse({ success: true, data: [] });
+      return;
+    }
+
+    const frameIds = boardFrames.map(f => f.frameId);
+
+    chrome.scripting.executeScript({
+      target: { tabId: dashboardTabId, frameIds },
+      func: function() {
+        const txt = (document.body && document.body.innerText) || '';
+
+        // ---- 直播间名：取"直播中"前一行或前几个字 ----
+        let title = null;
+        let m = txt.match(/([^\n\r]{2,40}?)\s*[\n\r]\s*直播中/);
+        if (m && m[1]) title = m[1].trim();
+        if (!title) {
+          m = txt.match(/([^\n\r\t]{2,40}?)\s{1,4}直播中/);
+          if (m && m[1]) title = m[1].trim();
+        }
+        if (title && /^\d[\d\s:/-]*$/.test(title)) title = null;
+        if (!title) title = document.title || '直播大屏';
+
+        // ---- 关键指标：innerText 正则匹配 ----
+        const metrics = {};
+        const NP = '([\\d,]+\\.?\\d*)';
+        function ex(label) {
+          const e = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          // 优先：标签（可带括号后缀）→ 换行 → 数字
+          // 例：净成交金额(元)\n743,932.14
+          let r = txt.match(new RegExp(e + '[^\\d\\n]*\\n\\s*' + NP));
+          if (r && r[1] !== '0') return r[1];
+          // 次选：标签后直接跟空白再跟数字（同行，无括号后缀）
+          r = txt.match(new RegExp(e + '[^\\S\\n]{0,4}' + NP));
+          if (r && r[1] !== '0') return r[1];
+          return null;
+        }
+
+        const v1 = ex('净成交金额');     if (v1) metrics.gmv    = v1;
+        const v2 = ex('整体消耗');       if (v2) metrics.spend  = v2;
+        const v3 = ex('净成交ROI');      if (v3) metrics.roi    = v3;
+        const v4 = ex('整体成交订单数'); if (v4) metrics.orders = v4;
+        const v5 = ex('GPM');            if (v5) metrics.gpm    = v5;
+        const v6 = ex('实时在线人数');   if (v6) metrics.online = v6;
+
+        return { url: location.href, title, metrics };
+      }
+    }, (results) => {
+      if (chrome.runtime.lastError) {
+        console.warn('[千川看板] executeScript 失败:', chrome.runtime.lastError.message);
+        sendResponse({ success: true, data: [] });
+        return;
+      }
+      // #12: 记录注入失败的帧，方便调试
+      const failedCount = (results || []).filter(r => !r || r.result === null || r.result === undefined).length;
+      if (failedCount > 0) {
+        console.warn('[千川看板] 有', failedCount, '个 frame 注入失败（可能未完全加载）');
+      }
+      const data = (results || [])
+        .filter(r => r && r.result !== null && r.result !== undefined)
+        .map(r => r.result);
+      console.log('[千川看板] GMV 采集完成，共', data.length, '条');
+      sendResponse({ success: true, data });
+    });
   });
 }
+

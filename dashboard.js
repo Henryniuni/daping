@@ -19,6 +19,14 @@
   let boards = [];
   let currentLayout = 1;
 
+  // GMV 播报定时器句柄（防止重复启动）
+  let _gmvTimeoutId = null;
+  let _gmvIntervalId = null;
+
+  // 上一个半点的 GMV/消耗快照，用于计算半小时增量
+  // 结构：{ [url]: { gmv: number, spend: number } }
+  let _gmvPrevSnapshot = {};
+
   // 千川大屏设计分辨率（标准 1920x1080）
   const DESIGN_WIDTH = 1920;
   const DESIGN_HEIGHT = 1080;
@@ -53,15 +61,18 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     console.log('[千川看板 Dashboard] 页面加载完成');
-    
+
     // 加载看板数据
     loadBoards();
-    
+
     // 绑定事件
     bindEvents();
-    
+
     // 绑定窗口大小改变监听（防抖）
     bindResizeListener();
+
+    // 启动半小时 GMV 播报定时器
+    startGmvBroadcastTimer();
   });
 
   // ============================================
@@ -222,6 +233,11 @@
         updateFwCount();
         fwModal.style.display = 'none';
       });
+    });
+
+    // 立即播报按钮
+    document.getElementById('btn-gmv-now').addEventListener('click', () => {
+      collectAndBroadcastGmv();
     });
 
     // Tab 切换
@@ -981,12 +997,11 @@
 
       const stream = new MediaStream(audioTracks);
 
-      // 3. 创建 AudioContext（16kHz）并连接处理节点
+      // 3. 创建 AudioContext（16kHz）并连接 AudioWorklet 处理节点
       const audioCtx = new AudioContext({ sampleRate: 16000 });
+      await audioCtx.audioWorklet.addModule(chrome.runtime.getURL('pcm-processor.js'));
       const source = audioCtx.createMediaStreamSource(stream);
-      const processor = audioCtx.createScriptProcessor(2048, 1, 1);
-
-      // 4. 连接到静音增益节点，避免双重播放
+      const processor = new AudioWorkletNode(audioCtx, 'pcm-processor');
       const silentGain = audioCtx.createGain();
       silentGain.gain.value = 0;
       processor.connect(silentGain);
@@ -1010,11 +1025,9 @@
       );
 
       // 6. 音频处理：发送 PCM 数据给 WebSocket
-      processor.onaudioprocess = (e) => {
+      processor.port.onmessage = (e) => {
         if (ws.readyState === WebSocket.OPEN) {
-          const float32 = e.inputBuffer.getChannelData(0);
-          const pcm = float32ToPCM16(float32);
-          ws.send(pcm);
+          ws.send(float32ToPCM16(e.data));
         }
       };
 
@@ -1028,6 +1041,13 @@
       adjustIframeScaleForItem(item, boardId);
 
     } catch (err) {
+      // #2 修复：确保已创建的音频资源在失败时得到释放
+      if (typeof audioCtx !== 'undefined' && audioCtx) {
+        try { audioCtx.close(); } catch (e) { /* ignore */ }
+      }
+      if (typeof displayStream !== 'undefined' && displayStream) {
+        displayStream.getTracks().forEach(t => t.stop());
+      }
       console.error('[千川看板] 转写启动失败:', err);
       const overlay2 = item.querySelector('.transcript-overlay');
       if (overlay2) {
@@ -1060,7 +1080,7 @@
 
     // 断开 processor
     if (processor) {
-      processor.onaudioprocess = null;
+      try { processor.port.onmessage = null; processor.port.close(); } catch (e) { /* ignore */ }
       try { processor.disconnect(); } catch (e) { /* ignore */ }
     }
 
@@ -1331,7 +1351,8 @@
       ws.onerror = (e) => {
         console.error('[千川看板] ASR WebSocket 错误:', e);
         onError('WebSocket 连接错误');
-        if (!resolved) reject(new Error('WebSocket 连接失败'));
+        // #15: onerror 后 onclose 也会触发，先设 resolved=true 防止双重 reject
+        if (!resolved) { resolved = true; reject(new Error('WebSocket 连接失败')); }
       };
 
       ws.onclose = (e) => {
@@ -1579,8 +1600,9 @@ ${lines.map(l => `<p>${escapeHtml(l)}</p>`).join('\n')}
       const audioStream = new MediaStream(audioTracks);
 
       const audioCtx = new AudioContext({ sampleRate: 16000 });
+      await audioCtx.audioWorklet.addModule(chrome.runtime.getURL('pcm-processor.js'));
       const source = audioCtx.createMediaStreamSource(audioStream);
-      const processor = audioCtx.createScriptProcessor(2048, 1, 1);
+      const processor = new AudioWorkletNode(audioCtx, 'pcm-processor');
       const silentGain = audioCtx.createGain();
       silentGain.gain.value = 0;
       processor.connect(silentGain);
@@ -1614,9 +1636,9 @@ ${lines.map(l => `<p>${escapeHtml(l)}</p>`).join('\n')}
       // 在转写面板显示等待提示（收到第一条文字后会被替换）
       textEl.innerHTML = '<span class="interim" style="color:#4a90d9">✓ ASR 已连接，等待识别结果…</span>';
 
-      processor.onaudioprocess = (e) => {
+      processor.port.onmessage = (e) => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(float32ToPCM16(e.inputBuffer.getChannelData(0)));
+          ws.send(float32ToPCM16(e.data));
         }
       };
 
@@ -1624,6 +1646,13 @@ ${lines.map(l => `<p>${escapeHtml(l)}</p>`).join('\n')}
       btnMic.classList.add('active');
 
     } catch (err) {
+      // #3 修复：释放已创建的音频资源
+      if (typeof audioCtx !== 'undefined' && audioCtx) {
+        try { audioCtx.close(); } catch (e) { /* ignore */ }
+      }
+      if (typeof displayStream !== 'undefined' && displayStream) {
+        displayStream.getTracks().forEach(t => t.stop());
+      }
       // 用户主动取消对话框
       if (err.name === 'NotAllowedError' || err.message === 'Permission denied by user' || err.message.includes('Permission denied')) {
         liveClearLog();
@@ -1646,6 +1675,210 @@ ${lines.map(l => `<p>${escapeHtml(l)}</p>`).join('\n')}
     const text = (textEl.innerText || textEl.textContent || '').trim();
     if (!text) { alert('暂无转写内容'); return; }
     downloadTranscript(null, '直播间监控', anchorEl, text);
+  }
+
+  // ============================================
+  // 半小时 GMV 播报
+  // ============================================
+
+  /**
+   * 启动定时器：在下一个整点或半点触发，之后每 30 分钟一次
+   */
+  function startGmvBroadcastTimer() {
+    // 防止重复启动（页面热重载 / loadBoards 多次调用）
+    if (_gmvTimeoutId !== null || _gmvIntervalId !== null) return;
+
+    const now = new Date();
+    const minutes = now.getMinutes();
+    const seconds = now.getSeconds();
+    const ms = now.getMilliseconds();
+
+    const minutesUntilNext = minutes < 30 ? (30 - minutes) : (60 - minutes);
+    const delayMs = minutesUntilNext * 60 * 1000 - seconds * 1000 - ms;
+
+    console.log(`[千川看板] GMV 播报将在 ${Math.round(delayMs / 1000)} 秒后首次触发`);
+
+    _gmvTimeoutId = setTimeout(() => {
+      _gmvTimeoutId = null;
+      collectAndBroadcastGmv();
+      _gmvIntervalId = setInterval(collectAndBroadcastGmv, 30 * 60 * 1000);
+    }, delayMs);
+  }
+
+  /**
+   * 向 background 请求收集各 iframe 的 GMV 数据，然后更新播报条
+   */
+  /**
+   * 将 "1,234,567.89" 格式的字符串解析为数字
+   */
+  function parseMetricNum(str) {
+    if (!str) return NaN;
+    return parseFloat(String(str).replace(/,/g, ''));
+  }
+
+  function collectAndBroadcastGmv() {
+    const ticker = document.getElementById('gmv-broadcast-ticker');
+    if (ticker) ticker.textContent = '数据采集中…';
+
+    chrome.runtime.sendMessage({ action: 'collectGmvData' }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.warn('[千川看板] collectGmvData 失败:', chrome.runtime.lastError.message);
+        updateBroadcastTicker('采集失败，请检查直播间是否已加载');
+        return;
+      }
+      const data = (response && response.success && response.data) ? response.data : [];
+
+      // 用抓到的真实房间名更新"直播大屏"占位标题
+      updateBoardTitlesFromGmvData(data);
+
+      // 计算半小时增量并构建播报文本
+      const deltaData = computeGmvDeltas(data);
+      updateBroadcastTicker(buildTickerText(deltaData));
+
+      // 更新快照供下次播报使用
+      data.forEach(item => {
+        if (!item || !item.url || !item.metrics) return;
+        _gmvPrevSnapshot[item.url] = {
+          gmv:   parseMetricNum(item.metrics.gmv),
+          spend: parseMetricNum(item.metrics.spend)
+        };
+      });
+    });
+  }
+
+  /**
+   * 根据当前采集数据和上一快照，计算每个直播间半小时增量
+   * 返回结构与原 data 一致，但 metrics 中的 gmv/spend/roi 替换为增量值
+   */
+  function computeGmvDeltas(dataList) {
+    return dataList.map(item => {
+      if (!item || !item.metrics) return item;
+
+      const prev = _gmvPrevSnapshot[item.url];
+      const curGmv   = parseMetricNum(item.metrics.gmv);
+      const curSpend = parseMetricNum(item.metrics.spend);
+
+      // 首次播报（无快照）直接显示原始值，标注"累计"
+      if (!prev) {
+        return { ...item, _noPrev: true };
+      }
+
+      const dGmv   = isNaN(curGmv)   ? NaN : curGmv   - (isNaN(prev.gmv)   ? 0 : prev.gmv);
+      const dSpend = isNaN(curSpend) ? NaN : curSpend - (isNaN(prev.spend) ? 0 : prev.spend);
+      const dRoi   = (!isNaN(dGmv) && !isNaN(dSpend) && dSpend > 0)
+        ? (dGmv / dSpend).toFixed(2)
+        : null;
+
+      const fmtNum = n => isNaN(n) ? null : n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+      return {
+        ...item,
+        _delta: true,
+        metrics: {
+          ...item.metrics,
+          gmv:   fmtNum(dGmv),
+          spend: fmtNum(dSpend),
+          roi:   dRoi
+        }
+      };
+    });
+  }
+
+  /**
+   * 把 GMV 数据里的真实房间名同步到 boards 数组和卡片头部显示
+   * 只更新仍是默认占位标题的 board
+   */
+  function updateBoardTitlesFromGmvData(dataList) {
+    let changed = false;
+    dataList.forEach(item => {
+      if (!item || !item.url || !item.title) return;
+      // item.title 是从 iframe DOM 里抓到的真实房间名
+      // 如果抓到的还是占位值，说明 extractLiveRoomName 没成功，跳过
+      const isPlaceholder = /^(直播大屏|未命名看板|未知直播间)$/.test(item.title.trim());
+      if (isPlaceholder) return;
+
+      const board = boards.find(b => b.url === item.url);
+      if (!board) return;
+      const newTitle = item.title.trim();
+      if (board.title === newTitle) return;
+
+      board.title = newTitle;
+      changed = true;
+
+      // 同步更新卡片头部 DOM（不重新渲染整个列表）
+      const gridItem = document.querySelector(`.grid-item[data-id="${board.id}"]`);
+      if (gridItem) {
+        const titleSpan = gridItem.querySelector('.item-title');
+        if (titleSpan) {
+          titleSpan.textContent = newTitle;
+          titleSpan.title = newTitle;
+        }
+      }
+    });
+
+    if (changed) {
+      // 持久化到 storage
+      chrome.runtime.sendMessage({ action: 'saveBoards', data: { boards } });
+    }
+  }
+
+  /**
+   * 根据采集数据构建播报文本
+   * @param {Array} dataList
+   * @returns {string}
+   */
+  function buildTickerText(dataList) {
+    const timeStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+    if (!dataList || dataList.length === 0) {
+      return `${timeStr} 播报 | 暂无数据（直播间可能未完全加载）`;
+    }
+
+    const parts = dataList
+      .filter(item => item && item.metrics)
+      .sort((a, b) => {
+        const oa = parseFloat((a.metrics.online || '0').replace(/,/g, '')) || 0;
+        const ob = parseFloat((b.metrics.online || '0').replace(/,/g, '')) || 0;
+        return ob - oa;
+      })
+      .map((item, idx) => {
+        // item.title 已经是 extractLiveRoomName() 抓到的真实名，优先用它
+        // 若为占位值则退回 boards 里的存储标题，最后兜底用序号
+        const isPlaceholder = /^(直播大屏|未命名看板|未知直播间)$/.test((item.title || '').trim());
+        const storedBoard = boards.find(b => b.url === item.url);
+        const rawTitle = (!isPlaceholder && item.title) ||
+                         (storedBoard && storedBoard.title) ||
+                         ('直播间' + (idx + 1));
+        const shortTitle = escapeHtml(rawTitle.replace(/[-–—]\s*(千川|巨量|直播大屏).*$/i, '').trim() || rawTitle);
+
+        // 增量播报 vs 首次播报（无上一快照）
+        const prefix = item._noPrev ? '累计' : '△';
+        const gmv    = item.metrics.gmv    ? `${prefix}GMV ¥${escapeHtml(item.metrics.gmv)}`   : '';
+        const spend  = item.metrics.spend  ? `${prefix}消耗 ¥${escapeHtml(item.metrics.spend)}` : '';
+        const roi    = item.metrics.roi    ? `ROI ${escapeHtml(item.metrics.roi)}`              : '';
+        const online = item.metrics.online ? `<span class="gmv-online-highlight">在线 ${escapeHtml(item.metrics.online)}</span>` : '';
+        const stats = [gmv, spend, roi, online].filter(Boolean).join(' · ');
+        return `${shortTitle}：${stats || '数据加载中'}`;
+      });
+
+    if (parts.length === 0) {
+      return `${timeStr} 播报 | 数据读取中，请稍后重试`;
+    }
+
+    return `${timeStr} 播报  ▍  ${parts.join('  <span class="gmv-sep">|</span>  ')}`;
+  }
+
+  /**
+   * 更新播报条文本并触发闪光动画
+   * @param {string} text
+   */
+  function updateBroadcastTicker(html) {
+    const ticker = document.getElementById('gmv-broadcast-ticker');
+    if (!ticker) return;
+    ticker.innerHTML = html;
+    ticker.classList.remove('updated');
+    void ticker.offsetWidth;
+    ticker.classList.add('updated');
   }
 
   /**

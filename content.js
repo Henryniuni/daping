@@ -99,6 +99,11 @@
         sendResponse(extractBoardUrl());
         return false;
 
+      case 'getGmvData':
+        // 从 board-next 大屏页面抓取 GMV 等关键指标
+        sendResponse(getGmvData());
+        return false;
+
       default:
         sendResponse({ success: false, error: '未知 action: ' + action });
         return false;
@@ -309,7 +314,7 @@
     }
 
     const url = window.location.href;
-    const title = document.title || '未命名看板';
+    const title = extractLiveRoomName() || document.title || '未命名看板';
 
     console.log(`${LOG_PREFIX} 准备保存看板:`, { url, title });
 
@@ -487,6 +492,9 @@
    * 页面加载完成后初始化
    */
   function init() {
+    // #7: 避免在 iframe 中重复初始化（all_frames:true 会注入所有 iframe）
+    if (window !== window.top) return;
+
     console.log(`${LOG_PREFIX} Content Script 已加载，当前URL:`, window.location.href);
 
     // 延时检查是否为大屏页面，显示浮动按钮
@@ -518,6 +526,9 @@
       childList: true,
       subtree: true
     });
+
+    // #9: 页面卸载时断开 observer，避免内存泄漏
+    window.addEventListener('pagehide', () => observer.disconnect(), { once: true });
   }
 
   // 执行初始化
@@ -647,37 +658,39 @@
   }
 
   function findBadgeInActiveRow() {
-    // 策略1：从"投放中"节点向上找行容器（TR / role=row / role=listitem），再向下找"直播大屏"
-    for (const el of document.querySelectorAll('*')) {
-      if (textIs(el, '投放中', false)) {
-        let container = el.parentElement;
-        for (let d = 0; d < 15 && container && container !== document.body; d++) {
-          const role = container.getAttribute && container.getAttribute('role');
-          if (container.tagName === 'TR' || role === 'row' || role === 'listitem') {
-            for (const child of container.querySelectorAll('*')) {
-              if (child !== el && textIs(child, '直播大屏')) {
-                return child;
-              }
-            }
-            break; // 行容器内无徽标，不继续向上
+    // #8: 预收集两类节点，避免嵌套 querySelectorAll 导致 O(n²) 遍历
+    const allEls = document.querySelectorAll('*');
+    const activeEls = [];
+    const badgeEls = [];
+    for (const el of allEls) {
+      if (textIs(el, '投放中', false)) activeEls.push(el);
+      if (textIs(el, '直播大屏')) badgeEls.push(el);
+    }
+    if (!activeEls.length || !badgeEls.length) return null;
+
+    // 策略1：从"投放中"节点向上找行容器，用 contains() 检查是否包含徽标
+    for (const el of activeEls) {
+      let container = el.parentElement;
+      for (let d = 0; d < 15 && container && container !== document.body; d++) {
+        const role = container.getAttribute && container.getAttribute('role');
+        if (container.tagName === 'TR' || role === 'row' || role === 'listitem') {
+          for (const badge of badgeEls) {
+            if (badge !== el && container.contains(badge)) return badge;
           }
-          container = container.parentElement;
+          break;
         }
+        container = container.parentElement;
       }
     }
 
-    // 策略2（兜底）：最小公共祖先——从"投放中"节点逐级向上，第一次包含"直播大屏"的祖先即行容器
-    for (const el of document.querySelectorAll('*')) {
-      if (textIs(el, '投放中', false)) {
-        let container = el.parentElement;
-        for (let d = 0; d < 20 && container && container !== document.body; d++) {
-          for (const child of container.querySelectorAll('*')) {
-            if (child !== el && textIs(child, '直播大屏')) {
-              return child;
-            }
-          }
-          container = container.parentElement;
+    // 策略2（兜底）：逐级向上，第一次包含"直播大屏"节点的祖先即行容器
+    for (const el of activeEls) {
+      let container = el.parentElement;
+      for (let d = 0; d < 20 && container && container !== document.body; d++) {
+        for (const badge of badgeEls) {
+          if (badge !== el && container.contains(badge)) return badge;
         }
+        container = container.parentElement;
       }
     }
 
@@ -1084,6 +1097,135 @@
 
     console.log(`${LOG_PREFIX} 未找到直播大屏链接`);
     return { url: null, title: null };
+  }
+
+  // ============================================
+  // GMV 数据抓取（board-next 大屏页面专用）
+  // ============================================
+
+  /**
+   * 从 board-next 页面头部抓取直播间名称
+   * 截图里那个红色标签 "鲸KANS官方直播间" 就是目标
+   * @returns {string|null}
+   */
+  function extractLiveRoomName() {
+    // 策略1：innerText 正则 —— 找"直播中"正前方的那段文字
+    // board-next 页面 header 布局：[logo]...[房间名]\n直播中 N小时N分钟
+    const pageText = (document.body && document.body.innerText) || '';
+    // 取紧挨在"直播中"前、长度 2-40、不全是空白的那一行
+    const m = pageText.match(/([^\n\r]{2,40}?)\s*[\n\r]\s*(直播中)/);
+    if (m && m[1]) {
+      const candidate = m[1].trim();
+      // 排除明显不是名字的内容（纯数字、时间戳、空串）
+      if (candidate.length >= 2 && !/^\d[\d\s:/-]*$/.test(candidate)) {
+        return candidate;
+      }
+    }
+    // 也尝试同行格式：房间名 直播中（中间只有空格）
+    const m2 = pageText.match(/([^\n\r\t]{2,40}?)\s{1,4}(直播中)/);
+    if (m2 && m2[1]) {
+      const candidate = m2[1].trim();
+      if (candidate.length >= 2 && !/^\d[\d\s:/-]*$/.test(candidate)) {
+        return candidate;
+      }
+    }
+
+    // 策略2：DOM 遍历 —— 找含"直播中"的小节点，取前驱兄弟文本
+    const allEls = Array.from(document.querySelectorAll('*'));
+    for (const el of allEls) {
+      const text = el.textContent.trim();
+      if (!text.startsWith('直播中') || text.length > 30) continue;
+
+      const parent = el.parentElement;
+      if (!parent) continue;
+
+      // 同级前驱兄弟
+      const siblings = Array.from(parent.children);
+      const idx = siblings.indexOf(el);
+      if (idx > 0) {
+        const prev = siblings[idx - 1].textContent.trim();
+        if (prev.length >= 2 && prev.length <= 50) return prev;
+      }
+      // 父元素的前一个兄弟
+      if (parent.previousElementSibling) {
+        const t = parent.previousElementSibling.textContent.trim();
+        if (t.length >= 2 && t.length <= 50) return t;
+      }
+    }
+
+    // 策略3：class 关键词选择器
+    const candidates = document.querySelectorAll(
+      '[class*="room-name"],[class*="roomName"],[class*="anchor-name"],[class*="anchorName"],' +
+      '[class*="host-name"],[class*="hostName"],[class*="live-name"],[class*="liveName"],' +
+      '[class*="streamer"],[class*="author"]'
+    );
+    for (const el of candidates) {
+      const t = el.textContent.trim();
+      if (t.length >= 2 && t.length <= 50) return t;
+    }
+
+    // 策略4：URL 参数
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const name = params.get('room_name') || params.get('live_room_name') || params.get('nickname');
+      if (name) return decodeURIComponent(name);
+    } catch (e) { /* ignore */ }
+
+    return null;
+  }
+
+  /**
+   * 从 board-next 页面抓取关键指标
+   * 使用 innerText + 正则匹配，不依赖具体 DOM 结构
+   * @returns {Object|null} { url, title, metrics } 或 null（非大屏页面）
+   */
+  function getGmvData() {
+    if (!isBoardPage()) return null;
+
+    const result = {
+      url: window.location.href,
+      title: extractLiveRoomName() || document.title || '直播大屏',
+      metrics: {}
+    };
+
+    // 获取页面可见文本（innerText 保留视觉顺序）
+    const pageText = (document.body && document.body.innerText) || '';
+
+    /**
+     * 在 pageText 中找标签附近的数字
+     * 千川大屏布局：数字在上、标签在下，即 "数字\n标签" 顺序
+     */
+    function extractNear(label) {
+      const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const numPat = '([\\d,]+\\.?\\d*)';
+
+      // 策略1：数字紧跟标签前（数字 → 少量空白 → 标签）
+      let m = pageText.match(new RegExp(numPat + '[\\s]{0,8}' + esc));
+      if (m && m[1] !== '0') return m[1];
+
+      // 策略2：标签紧跟数字前（标签 → 少量空白 → 数字）
+      m = pageText.match(new RegExp(esc + '[\\s]{0,8}' + numPat));
+      if (m && m[1] !== '0') return m[1];
+
+      return null;
+    }
+
+    const labelMap = [
+      { label: '净成交金额', key: 'gmv' },
+      { label: '整体消耗',   key: 'spend' },
+      { label: '净成交ROI',  key: 'roi' },
+      { label: '整体成交订单数', key: 'orders' },
+      { label: 'GPM',        key: 'gpm' },
+      { label: '实时在线人数', key: 'online' },
+    ];
+
+    for (const { label, key } of labelMap) {
+      const val = extractNear(label);
+      if (val) result.metrics[key] = val;
+    }
+
+    console.log(`${LOG_PREFIX} GMV 数据:`, result.metrics, '\n页面文本片段:', pageText.slice(0, 300));
+    return result;
   }
 
 })();

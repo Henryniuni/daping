@@ -13,6 +13,10 @@
       <h1>📊 千川直播聚合监控中心</h1>
       <span class="subtitle">实时多账号数据大屏</span>
     </div>
+    <div class="header-tabs">
+      <button class="tab-btn active" id="tab-btn-boards">📊 聚合看板</button>
+      <button class="tab-btn" id="tab-btn-live">📺 直播间监控</button>
+    </div>
     <div class="header-right">
       <button id="btn-refresh-all" class="btn">🔄 全部刷新</button>
       <button id="btn-clear-all" class="btn btn-danger">🗑️ 清空全部</button>
@@ -30,10 +34,11 @@
     </div>
   </header>
 
-  <!-- Tab 栏 -->
-  <div class="tab-bar">
-    <button class="tab-btn active" id="tab-btn-boards">📊 聚合看板</button>
-    <button class="tab-btn" id="tab-btn-live">📺 直播间监控</button>
+  <!-- GMV 半小时播报条（独立一行） -->
+  <div id="gmv-broadcast-bar" class="gmv-broadcast-bar">
+    <span class="gmv-broadcast-label">📊 GMV 播报</span>
+    <span id="gmv-broadcast-ticker" class="gmv-broadcast-ticker">等待首次播报（将在下一个整点或半点触发）</span>
+    <button id="btn-gmv-now" class="gmv-broadcast-btn" title="立即播报">立即播报</button>
   </div>
 
   <!-- 主体容器（Tab 1：聚合看板） -->
