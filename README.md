@@ -15,10 +15,12 @@
 | 自动缩放 | iframe 按容器尺寸自动缩放，完整显示 1920×1080 大屏内容 |
 | 拖拽排序 | 卡片支持拖拽调整展示顺序 |
 | 自动采集 | 一键遍历 ECP 账号列表，批量保存所有直播大屏链接 |
+| GMV 半小时播报 | 每个整/半点自动播报各直播间半小时增量 GMV、消耗、加权 ROI 及实时在线人数；支持立即播报 |
 | 实时语音转写 | 1×1 布局下捕获标签页音频，接入腾讯云 ASR 实时转写，流式显示结果 |
 | 实时语速统计 | 转写面板顶部实时显示语速（字/分钟） |
 | 违规词检测 | 上传违规词列表，转写中命中时红色高亮显示 |
 | 多格式导出 | 转写历史支持导出为 TXT / Markdown / CSV / Excel / Word / PDF |
+| 直播间监控 | 独立 Tab 嵌入抖音直播间画面，配合实时转写同步监看 |
 
 ---
 
@@ -117,6 +119,22 @@
 
 ---
 
+### GMV 半小时播报
+
+看板顶部播报条会在每个**整点/半点**自动触发，展示各直播间本半小时的增量数据：
+
+- **△GMV**：本半小时新增净成交金额
+- **△消耗**：本半小时新增广告消耗
+- **ROI**：△GMV ÷ △消耗（加权计算）
+- **在线人数**：当前实时在线人数（红色高亮）
+- 按在线人数从高到低排列
+
+> 首次播报（页面打开后第一个整/半点）因无上一快照，显示"累计"值。后续播报均显示增量（△）。
+
+点击播报条右侧 **立即播报** 按钮可随时手动触发一次采集。
+
+---
+
 ### 第四步：违规词管理
 
 1. 点击看板顶部 **🚫 违规词**
@@ -148,8 +166,9 @@
 | `scripting` | 向千川页面注入内容脚本 |
 | `tabs` | 管理标签页（自动采集流程） |
 | `tabCapture` | 捕获标签页音频（语音转写） |
+| `webNavigation` | 枚举 iframe frame ID，用于 GMV 数据采集 |
 | `declarativeNetRequest` | 移除 X-Frame-Options 响应头，允许 iframe 加载千川大屏 |
-| `host_permissions` | 仅限 `qianchuan.jinritemai.com`、`buyin.jinritemai.com`、`business.oceanengine.com` |
+| `host_permissions` | 仅限 `qianchuan.jinritemai.com`、`buyin.jinritemai.com`、`business.oceanengine.com`、`*.douyin.com` |
 
 ---
 
@@ -160,10 +179,12 @@
 ├── rules.json           # 移除跨域响应头的网络规则
 ├── config.js            # ASR 基础配置（不含凭证）
 ├── xlsx.mini.min.js     # SheetJS，用于 Excel 导入/导出
+├── pcm-processor.js     # AudioWorklet PCM 处理器（语音转写）
 ├── background.js        # Service Worker，数据管理与消息路由
 ├── content.js           # 注入千川页面，自动导航与大屏捕获
+├── anticapture.js       # 注入抖音页面（MAIN world）
 ├── popup.html/js        # 插件弹出窗口
-├── dashboard.html/js    # 聚合看板主页面
+├── dashboard.html/js    # 聚合看板主页面（含 GMV 播报、直播间监控）
 └── dashboard.css        # 看板样式
 ```
 
@@ -182,6 +203,7 @@
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v2026.03.27 | 2026-03-27 | GMV 半小时增量播报、直播间监控 Tab、代码质量修复（#7-#17） |
 | v2026.03.25-2 | 2026-03-25 | 新增违规词管理、多格式导出、语速统计、转写面板优化 |
 | v2026.03.25 | 2026-03-25 | 初始稳定版，多账号聚合 + 实时语音转写 |
 
