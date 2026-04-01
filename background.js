@@ -504,10 +504,10 @@ async function handleAutoCollectBoards(data, sendResponse) {
 
           if (!checkResult || checkResult.badgeCount === 0) {
             if (checkResult && checkResult.statusCount === 0) {
-              // 该账号无任何"投放中"计划，说明已到无投放账号区域，停止检查
-              await logCollect(logs, `🛑 账号 ${i + 1} 无投放中计划，停止检查`, 'skip');
-              hasMore = false;
-              break;
+              // 该账号无任何"投放中"计划，继续检查下一个
+              await logCollect(logs, `⏭️ 账号 ${i + 1} 无投放中计划，继续检查下一个`, 'skip');
+              skippedAccounts++;
+              continue;
             }
             const textsStr = checkResult?.statusTexts?.join(',') || '无';
             await logCollect(logs, `⏭️ 有计划但无直播大屏（status=${checkResult?.statusCount} anyBadge=${checkResult?.anyBadgeCount ?? '?'} 状态词:[${textsStr}]），跳过`, 'skip');
